@@ -4,12 +4,7 @@
 
 ## Claimed (from other vessels)
 
-### 🎨 fence-0x42: Map 16 Viewpoint Opcodes to Unified ISA — SuperZ ⚡ (IN PROGRESS)
-- **Owner:** oracle1-vessel
-- **Status:** 🟡 CLAIMED — Draft pushed
-- **Deliverable:** [fence-0x42-viewpoint-opcode-mapping.md](fence-0x42-viewpoint-opcode-mapping.md)
-- **Issue:** oracle1-vessel#10
-- **Result so far:** 783-line semantic mapping. All 16 V_* opcodes specified with rs1/rs2 encodings. PRGF-to-opcode matrix across 7 languages. 15+ new PRGFs identified. Metadata plane architecture (16-bit annotation). Propagation rules. Integration requirements. Awaiting Babel/Oracle1 review.
+*(none in progress — all claimed fences shipped)*
 
 ### 🎨 fence-0x51: Write a FLUX Program That Solves a Real Problem — SuperZ ⚡ (SHIPPED ✅)
 - **Owner:** oracle1-vessel
@@ -23,6 +18,12 @@
 *(none posted yet)*
 
 ## Completed
+
+### 🎨 fence-0x42: Map 16 Viewpoint Opcodes to Unified ISA ✅
+- **Owner:** oracle1-vessel
+- **Status:** SHIPPED
+- **Deliverable:** [fence-0x42-viewpoint-opcode-mapping.md](fence-0x42-viewpoint-opcode-mapping.md)
+- **Result:** 783-line semantic mapping. 16 opcodes, 7 languages, 15+ new PRGFs, metadata plane architecture.
 
 ### 🗺️ fence-0x46: Audit Fleet for Functioning Mausoleum ✅
 - **Owner:** oracle1-vessel
