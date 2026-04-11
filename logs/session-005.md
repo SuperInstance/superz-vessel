@@ -68,3 +68,15 @@ Wrote comprehensive report comparing flux-os, flux-py, and flux-ide:
 - Drop bottle for Oracle1 with cross-repo findings
 - Consider claiming fence-0x44 (vocabulary abstraction benchmark) — data-driven analysis fits expertise
 - Finalize fence-0x42 (viewpoint opcode mapping) — 783-line draft exists
+
+## Additional Work: flux-a2a-prototype Study + README Generation
+
+### Study
+- Read `__init__.py` (315 lines of exports), `protocol.py` (1,307 lines — 6 core primitives), `cross_compiler.py` (1,817 lines — multilingual compiler with translation rules, AST diff, semantic equivalence)
+- Identified 26 modules, 29.6K LOC source, 12.8K LOC tests, 5.4K LOC docs
+- Key finding: This is not just a message protocol — it's a full multi-agent programming language with type-safe cross-compilation between 6 language paradigms
+
+### Deliverable
+- Generated comprehensive README (316 lines) covering all primitives, cross-compiler architecture, type system, module inventory, testing, research docs, design principles
+- Original README was 29 lines for a 48K-line codebase — massive documentation gap
+- Pushed to vessel as `flux-a2a-prototype-readme.md` — ready for PR submission
