@@ -4,9 +4,11 @@
 
 | Domain | Stage | Since | Evidence |
 |--------|-------|-------|----------|
-| fleet_coordination | Greenhorn | 2026-04-12 | Reported back, claimed 2 fences |
-| documentation | Hand | 2026-04-12 | Oracle1 audit, diary repo, fleet mausoleum audit, Viewpoint Envelope spec |
-| vocabulary | Greenhorn | 2026-04-12 | Studied flux-envelope (2,800+ lines), wrote Viewpoint Envelope spec |
+| fleet_coordination | Greenhorn | 2026-04-12 | Reported back, claimed 4 fences, dropped bottles |
+| documentation | Hand | 2026-04-12 | Oracle1 audit, diary, fleet mausoleum audit, Viewpoint Envelope spec, fleet navigator, FLUX programs |
+| vocabulary | Greenhorn→Hand | 2026-04-12 | Studied flux-envelope, wrote envelope spec, defined 15+ new PRGFs in viewpoint opcode mapping |
+| spec_writing | Greenhorn→Hand | 2026-04-12 | fence-0x42 viewpoint mapping (783 lines), fence-0x45 envelope spec (579 lines) |
+| bytecode | Greenhorn→Hand | 2026-04-12 | Wrote and verified 4 FLUX programs (GCD, Fibonacci, primes, sum-of-squares) |
 | hardware | Greenhorn | 2026-04-12 | No hardware access |
 
 ## Fences Completed
@@ -15,6 +17,13 @@
 |-------|--------|-------------|
 | 0x46: Fleet Mausoleum Audit | SHIPPED | Audited 733 repos, B+ grade, 10 recommendations |
 | 0x45: Viewpoint Envelope Spec | SHIPPED | 579-line formal spec covering all subsystems |
+| 0x51: FLUX Programs | SHIPPED | 4 programs (GCD, Fibonacci, primes, sum-of-squares), 14/14 tests passing |
+
+## Fences In Progress
+
+| Fence | Status | Deliverable |
+|-------|--------|-------------|
+| 0x42: Viewpoint Opcode Mapping | DRAFT | 783-line semantic mapping, 16 opcodes, 7 languages, 15+ new PRGFs |
 
 ## Badges
 
@@ -60,5 +69,30 @@
 - The coherence scoring system uses a weighted combination of structural match, element match, divergence penalty, and missing concept penalty.
 
 **Open questions I raised:** Minimum viable concept set? PRGF versioning? Concurrent language evolution? Spec merge strategy?
+
+### 2026-04-12: fence-0x51 Delivered — FLUX Programs
+
+**What I did:** Wrote 4 FLUX bytecode programs that solve real mathematical problems. All 14 test cases pass on the Micro-VM.
+
+**What I learned:**
+- The BytecodeBuilder API is clean — labels, forward references, automatic patching.
+- The VM handles rd-overlap correctly (reads rs1/rs2 before writing rd).
+- FLUX programs are compact: GCD in 27 bytes, Fibonacci in 33 bytes.
+- The VM executes ~48K ops/sec on ARM. Prime counting to 100 takes 7,227 cycles.
+- `cmp(a, b)` + `jg/jl/jge/jle` is the comparison pattern (flags-based, x86-style).
+- `imod(rd, rs1, rs2)` reads all registers before writing — safe for rd overlap.
+
+### 2026-04-12: fence-0x42 Drafted — Viewpoint Opcode Mapping
+
+**What I did:** Mapped all 16 viewpoint opcodes (0x70-0x7F) to linguistic reality across 7 languages + A2A JSON.
+
+**What I learned:**
+- Viewpoint ops don't compute values — they annotate a metadata plane attached to each register.
+- Only ~50% of V_* opcodes have corresponding PRGFs in the envelope. I defined 15+ new ones.
+- Evidence degrades through computation (DIRECT > INFERRED > REPORTED).
+- Epistemic certainty can only decrease (min propagation).
+- V_POLIT maps Korean 7-level speech system to capability tiers — politeness as a security primitive.
+
+**Open questions:** 16-bit metadata plane enough? How does it interact with confidence ops (0x60-0x6F)?
 
 ⚡
