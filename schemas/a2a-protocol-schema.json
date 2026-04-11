@@ -1,0 +1,352 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://superinstance.github.io/schemas/a2a-protocol-schema.json",
+  "title": "FLUX A2A Protocol Schema",
+  "description": "Machine-readable schema for Agent-to-Agent communication in the FLUX ecosystem. Defines message formats, trust operations, capability management, and coordination primitives.",
+  "version": "1.0.0",
+  "type": "object",
+
+  "definitions": {
+    "AgentAddress": {
+      "type": "object",
+      "description": "Hierarchical agent address following the URI scheme from SIGNAL-AMENDMENT-1 Resolution 5.",
+      "required": ["scheme", "vessel", "instance"],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["agent", "local", "fleet", "remote"],
+          "description": "Address resolution tier: local (in-process), fleet (git-native), remote (HTTP/gRPC)"
+        },
+        "vessel": {
+          "type": "string",
+          "description": "Vessel name (e.g., 'superz', 'quill', 'jetsonclaw1')"
+        },
+        "instance": {
+          "type": "string",
+          "description": "Instance identifier (e.g., 'main', 'cortex-7')"
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "description": "Branch context for multi-branch execution"
+        },
+        "uri": {
+          "type": "string",
+          "description": "Full URI representation: agent://network/vessel/instance/branch"
+        }
+      }
+    },
+
+    "MessageId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+      "description": "UUID v4 message identifier for deduplication and response matching"
+    },
+
+    "ConfidenceScore": {
+      "type": "object",
+      "description": "Confidence value with provenance tracking per SIGNAL.md.",
+      "required": ["value", "source"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence level: 0.0 = unknown, 1.0 = certain"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["sensor", "model", "human", "derived", "default"],
+          "description": "Origin of the confidence assessment"
+        },
+        "decay_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.0,
+          "description": "Per-cycle confidence decay factor"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.5,
+          "description": "Minimum confidence below which the value degrades to zero"
+        }
+      }
+    },
+
+    "A2AMessage": {
+      "type": "object",
+      "description": "Standard A2A message envelope for agent communication.",
+      "required": ["id", "type", "from", "to", "timestamp", "payload"],
+      "properties": {
+        "id": { "$ref": "#/definitions/MessageId" },
+        "type": {
+          "type": "string",
+          "enum": ["tell", "ask", "delegate", "broadcast", "report", "signal"],
+          "description": "Message type corresponding to A2A opcodes 0x50-0x5B"
+        },
+        "from": { "$ref": "#/definitions/AgentAddress" },
+        "to": {
+          "oneOf": [
+            { "$ref": "#/definitions/AgentAddress" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/AgentAddress" },
+              "description": "Multiple recipients (for broadcast)"
+            }
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the message was sent"
+        },
+        "reply_to": {
+          "$ref": "#/definitions/MessageId",
+          "description": "If this is a response, the ID of the original message"
+        },
+        "confidence": { "$ref": "#/definitions/ConfidenceScore" },
+        "payload": {
+          "type": "object",
+          "description": "Message payload — schema depends on message type",
+          "properties": {
+            "opcode": {
+              "type": "string",
+              "description": "The A2A opcode that generated this message"
+            },
+            "data": {
+              "description": "Payload data — can be any JSON value"
+            },
+            "trust_level": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "Trust level of the sender (0-255)"
+            },
+            "priority": {
+              "type": "string",
+              "enum": ["low", "medium", "high", "critical"],
+              "default": "medium"
+            },
+            "ttl": {
+              "type": "integer",
+              "description": "Time-to-live in seconds for message expiration"
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Optional metadata for routing and debugging",
+          "properties": {
+            "correlation_id": { "type": "string" },
+            "trace_id": { "type": "string" },
+            "branch_id": { "type": "integer" },
+            "cycle_count": { "type": "integer" }
+          }
+        }
+      }
+    },
+
+    "TrustEntry": {
+      "type": "object",
+      "description": "Trust level record for agent-to-agent trust management.",
+      "required": ["agent", "level", "basis", "updated"],
+      "properties": {
+        "agent": { "$ref": "#/definitions/AgentAddress" },
+        "level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Trust level: 0=none, 128=default, 255=full"
+        },
+        "basis": {
+          "type": "string",
+          "enum": ["assigned", "earned", "derived", "revoked"],
+          "description": "How the trust level was established"
+        },
+        "updated": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string", "enum": ["set", "boost", "decay", "revoke"] },
+              "value": { "type": "integer" },
+              "reason": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    },
+
+    "Capability": {
+      "type": "object",
+      "description": "Agent capability claim for capability-based access control.",
+      "required": ["name", "agent", "granted_by"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Capability name (e.g., 'fleet:write', 'isa:modify', 'repo:create')"
+        },
+        "agent": { "$ref": "#/definitions/AgentAddress" },
+        "granted_by": { "$ref": "#/definitions/AgentAddress" },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "repos": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Repo names this capability applies to"
+            },
+            "opcodes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Opcode ranges this capability covers"
+            },
+            "expiry": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    },
+
+    "CoordinationPrimitive": {
+      "type": "object",
+      "description": "Definition of a multi-agent coordination primitive (DISCUSS, SYNTHESIZE, REFLECT, CO_ITERATE).",
+      "required": ["mnemonic", "opcode", "format", "semantics", "participants"],
+      "properties": {
+        "mnemonic": { "type": "string" },
+        "opcode": {
+          "type": "string",
+          "pattern": "^0x[0-9A-Fa-f]{2}$",
+          "description": "Proposed opcode address (pending convergence)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["A", "B", "C", "D", "E", "F", "G"],
+          "description": "Instruction encoding format"
+        },
+        "semantics": {
+          "type": "string",
+          "description": "Formal semantic description of what the primitive does"
+        },
+        "participants": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "integer", "minimum": 1, "description": "Minimum agents required" },
+            "max": { "type": "integer", "description": "Maximum agents supported" },
+            "roles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "required": { "type": "boolean" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "timeout": {
+          "type": "object",
+          "properties": {
+            "default_ms": { "type": "integer" },
+            "max_ms": { "type": "integer" },
+            "failure_mode": {
+              "type": "string",
+              "enum": ["timeout_error", "partial_result", "best_effort"]
+            }
+          }
+        },
+        "conformance_test": {
+          "type": ["string", "null"],
+          "description": "ID of the conformance test vector for this primitive"
+        }
+      }
+    }
+  },
+
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "A2A protocol version (semantic versioning)"
+    },
+    "isa_version": {
+      "type": "string",
+      "enum": ["v1-runtime", "v2-unified"],
+      "description": "Which ISA numbering this configuration targets"
+    },
+    "message_format": { "$ref": "#/definitions/A2AMessage" },
+    "trust_entries": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/TrustEntry" }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Capability" }
+    },
+    "coordination_primitives": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/CoordinationPrimitive" }
+    },
+    "address_resolution": {
+      "type": "object",
+      "description": "Configuration for hierarchical address resolution (SIGNAL-AMENDMENT-1 Resolution 5)",
+      "properties": {
+        "local_resolver": {
+          "type": "string",
+          "description": "How local addresses are resolved (e.g., 'function_call')"
+        },
+        "fleet_resolver": {
+          "type": "string",
+          "description": "How fleet addresses are resolved (e.g., 'message_in_a_bottle')"
+        },
+        "remote_resolver": {
+          "type": "string",
+          "description": "How remote addresses are resolved (e.g., 'http_grpc')"
+        },
+        "default_timeout_ms": {
+          "type": "integer",
+          "default": 30000
+        }
+      }
+    },
+    "error_handling": {
+      "type": "object",
+      "description": "Error handling configuration (pending SIGNAL-AMENDMENT-1 Resolution 3 approval)",
+      "properties": {
+        "try_opcode": {
+          "type": ["string", "null"],
+          "description": "Proposed TRY opcode address"
+        },
+        "catch_opcode": {
+          "type": ["string", "null"]
+        },
+        "raise_opcode": {
+          "type": ["string", "null"]
+        },
+        "error_types": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "integer" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "recoverable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
