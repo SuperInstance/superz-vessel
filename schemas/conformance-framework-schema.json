@@ -1,0 +1,706 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://superinstance.github.io/schemas/conformance-framework-schema.json",
+  "title": "FLUX Cross-Runtime Conformance Framework",
+  "description": "Schema definitions for the FLUX cross-runtime conformance testing framework. Covers test vectors, run results, suite manifests, runtime descriptors, and conformance reports.",
+  "definitions": {
+    "vm_final_state": {
+      "type": "string",
+      "enum": ["HALTED", "YIELDED", "ERRORED", "CYCLE_LIMIT"],
+      "description": "Possible VM states after execution."
+    },
+    "isa_version": {
+      "type": "string",
+      "enum": ["isa-v1", "isa-v2"],
+      "description": "ISA version identifier. isa-v1 = runtime opcodes.py (HALT=0x80, 5 formats A-E,G). isa-v2 = unified spec isa_unified.py (HALT=0x00, 7 formats A-G)."
+    },
+    "encoding_format": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D", "E", "F", "G"],
+      "description": "Instruction encoding format. Note: same letter may have different byte sizes across ISA versions (e.g., C is 3B in isa-v1 but 2B in isa-v2)."
+    },
+    "test_category": {
+      "type": "string",
+      "enum": [
+        "arithmetic",
+        "float",
+        "logic",
+        "comparison",
+        "branch",
+        "stack",
+        "memory",
+        "call",
+        "regions",
+        "a2a",
+        "type",
+        "simd",
+        "system",
+        "edge-case"
+      ],
+      "description": "Test category grouping."
+    },
+    "register_snapshot": {
+      "type": "object",
+      "description": "Register values keyed by register index (string).",
+      "additionalProperties": { "type": ["integer", "number"] }
+    },
+    "flag_state": {
+      "type": "object",
+      "description": "Condition flag state.",
+      "properties": {
+        "zero":    { "type": "boolean" },
+        "sign":    { "type": "boolean" },
+        "carry":   { "type": "boolean" },
+        "overflow": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "memory_snapshot": {
+      "type": "object",
+      "description": "Memory contents keyed by region name.",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Memory offsets keyed by integer offset (string), values as hex strings.",
+        "additionalProperties": { "type": "string" }
+      }
+    }
+  },
+
+  "# === DOCUMENT 1: TEST VECTOR ===": "See TestVector below.",
+
+  "TestVector": {
+    "title": "FLUX Conformance Test Vector",
+    "description": "A single test vector defining bytecode input, preconditions, and expected results. Extends the existing test-vector-schema.json with ISA versioning, multi-encoding support, and runtime requirement declarations.",
+    "type": "object",
+    "required": ["id", "name", "category", "description", "isa_versions", "bytecode", "expected"],
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+        "description": "Unique test identifier, e.g. 'arith-iadd-basic'."
+      },
+      "name": {
+        "type": "string",
+        "description": "Human-readable test name."
+      },
+      "category": {
+        "$ref": "#/definitions/test_category"
+      },
+      "description": {
+        "type": "string",
+        "description": "What behavior this test verifies."
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["smoke", "regression", "p0", "p1", "p2", "isa-v1", "isa-v2"]
+        },
+        "description": "Classification tags. p0 = must-pass gate. isa-v1/isa-v2 = ISA version compatibility markers."
+      },
+      "isa_versions": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/isa_version" },
+        "minItems": 1,
+        "description": "ISA versions this vector provides bytecode encodings for."
+      },
+      "required_formats": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/encoding_format" },
+        "description": "Instruction formats this vector exercises. Used for coverage analysis."
+      },
+      "bytecode": {
+        "oneOf": [
+          {
+            "type": "string",
+            "pattern": "^[0-9a-f]+$",
+            "description": "Single ISA version bytecode hex (backward-compatible shorthand, assumed isa-v1)."
+          },
+          {
+            "type": "object",
+            "description": "Per-ISA-version bytecode encodings.",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]+$",
+              "description": "Raw bytecode as hex string for this ISA version."
+            }
+          }
+        ],
+        "description": "Bytecode encodings. Either a single hex string (isa-v1) or a map of isa_version -> hex_string."
+      },
+      "preconditions": {
+        "type": "object",
+        "description": "Register/memory state to set before execution.",
+        "properties": {
+          "gp": {
+            "$ref": "#/definitions/register_snapshot",
+            "description": "General-purpose register preconditions {register_index: integer_value}."
+          },
+          "fp": {
+            "$ref": "#/definitions/register_snapshot",
+            "description": "Floating-point register preconditions {register_index: float_value}."
+          },
+          "memory": {
+            "$ref": "#/definitions/memory_snapshot",
+            "description": "Memory preconditions {region_name: {offset: hex_string}}."
+          }
+        }
+      },
+      "runtime_requirements": {
+        "type": "object",
+        "description": "Capabilities a runtime must support to run this vector.",
+        "properties": {
+          "min_registers_gp": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 8,
+            "description": "Minimum number of general-purpose registers required."
+          },
+          "min_registers_fp": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Minimum number of floating-point registers required."
+          },
+          "requires_a2a": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the runtime must support A2A protocol operations."
+          },
+          "requires_simd": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the runtime must support SIMD/vector operations."
+          },
+          "requires_regions": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the runtime must support named memory regions."
+          },
+          "max_cycles": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 10000,
+            "description": "Maximum execution cycles before CYCLE_LIMIT state."
+          },
+          "float_tolerance": {
+            "type": "number",
+            "default": 1e-6,
+            "description": "Tolerance for floating-point register comparisons."
+          }
+        }
+      },
+      "expected": {
+        "type": "object",
+        "required": ["final_state"],
+        "description": "Expected post-execution state.",
+        "properties": {
+          "final_state": {
+            "$ref": "#/definitions/vm_final_state"
+          },
+          "gp": {
+            "$ref": "#/definitions/register_snapshot",
+            "description": "Expected GP register values. Only registers that must be checked need listing."
+          },
+          "fp": {
+            "$ref": "#/definitions/register_snapshot",
+            "description": "Expected FP register values."
+          },
+          "memory": {
+            "$ref": "#/definitions/memory_snapshot",
+            "description": "Expected memory contents after execution."
+          },
+          "flags": {
+            "$ref": "#/definitions/flag_state",
+            "description": "Expected condition flag state."
+          },
+          "max_cycles": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum cycles allowed. Execution exceeding this should yield CYCLE_LIMIT."
+          },
+          "error_type": {
+            "type": "string",
+            "description": "If final_state is ERRORED, the expected error class (e.g., 'DivisionByZero', 'StackOverflow', 'InvalidOpcode')."
+          }
+        }
+      }
+    }
+  },
+
+  "# === DOCUMENT 2: TEST RUN RESULT ===": "See TestRunResult below.",
+
+  "TestRunResult": {
+    "title": "FLUX Conformance Test Run Result",
+    "description": "Result of executing a single test vector against a specific runtime. Emitted by the runner adapter after execution and validation.",
+    "type": "object",
+    "required": ["vector_id", "runtime_name", "runtime_version", "isa_version", "verdict", "duration_ms"],
+    "properties": {
+      "vector_id": {
+        "type": "string",
+        "description": "ID of the test vector that was run."
+      },
+      "runtime_name": {
+        "type": "string",
+        "description": "Name of the runtime implementation (e.g., 'flux-runtime', 'flux-core', 'flux-os')."
+      },
+      "runtime_version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+",
+        "description": "Semver version of the runtime."
+      },
+      "isa_version": {
+        "$ref": "#/definitions/isa_version",
+        "description": "ISA version used for this run."
+      },
+      "verdict": {
+        "type": "string",
+        "enum": ["PASS", "FAIL", "SKIP", "ERROR"],
+        "description": "Test verdict. PASS = all postconditions met. FAIL = state mismatch. SKIP = runtime lacks required capability. ERROR = runtime crashed or timed out."
+      },
+      "duration_ms": {
+        "type": "number",
+        "minimum": 0,
+        "description": "Wall-clock execution time in milliseconds."
+      },
+      "cycle_count": {
+        "type": ["integer", "null"],
+        "description": "Actual cycles consumed by the VM, if measured."
+      },
+      "memory_usage_bytes": {
+        "type": ["integer", "null"],
+        "description": "Peak memory usage during execution, if measured."
+      },
+      "expected_state": {
+        "$ref": "#/definitions/vm_final_state",
+        "description": "The expected final VM state from the test vector."
+      },
+      "actual_state": {
+        "$ref": "#/definitions/vm_final_state",
+        "description": "The actual final VM state produced by the runtime."
+      },
+      "register_mismatches": {
+        "type": "object",
+        "description": "Register values that did not match expectations.",
+        "additionalProperties": {
+          "type": "object",
+          "required": ["expected", "actual"],
+          "properties": {
+            "expected": { "description": "Expected value" },
+            "actual": { "description": "Actual value from runtime" }
+          }
+        }
+      },
+      "flag_mismatches": {
+        "type": "object",
+        "description": "Flag values that did not match expectations.",
+        "additionalProperties": {
+          "type": "object",
+          "required": ["expected", "actual"],
+          "properties": {
+            "expected": { "type": "boolean" },
+            "actual": { "type": "boolean" }
+          }
+        }
+      },
+      "skip_reason": {
+        "type": "string",
+        "description": "If verdict is SKIP, the reason (e.g., 'unsupported format F', 'no A2A support')."
+      },
+      "error_message": {
+        "type": "string",
+        "description": "If verdict is ERROR, the runtime error or crash message."
+      },
+      "details": {
+        "type": "string",
+        "description": "Free-form human-readable details about the run."
+      }
+    }
+  },
+
+  "# === DOCUMENT 3: TEST SUITE MANIFEST ===": "See TestSuiteManifest below.",
+
+  "TestSuiteManifest": {
+    "title": "FLUX Conformance Test Suite Manifest",
+    "description": "Complete manifest of all test vectors in a conformance suite, with metadata for versioning and coverage tracking.",
+    "type": "object",
+    "required": ["schema_version", "manifest_version", "generated", "isa_versions", "vectors", "categories", "statistics"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+$",
+        "description": "Version of this manifest schema format."
+      },
+      "manifest_version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+$",
+        "description": "Semantic version of this manifest. Bumped when vectors are added/modified/removed."
+      },
+      "generated": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp when this manifest was generated."
+      },
+      "generated_by": {
+        "type": "string",
+        "description": "Tool or agent that generated this manifest."
+      },
+      "isa_versions": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/isa_version" },
+        "description": "ISA versions that vectors in this suite target."
+      },
+      "vectors": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "category", "tags", "isa_versions", "formats"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Test vector ID."
+            },
+            "category": {
+              "$ref": "#/definitions/test_category"
+            },
+            "tags": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "isa_versions": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/isa_version" },
+              "description": "ISA versions this vector provides bytecode for."
+            },
+            "formats": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/encoding_format" },
+              "description": "Instruction formats this vector exercises."
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "SHA-256 hash of the vector JSON file for integrity verification."
+            }
+          }
+        },
+        "description": "Ordered list of all test vectors in the suite."
+      },
+      "categories": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of vector IDs in this category."
+        },
+        "description": "Vectors grouped by category."
+      },
+      "statistics": {
+        "type": "object",
+        "required": ["total_vectors", "p0_count", "category_counts", "format_coverage"],
+        "properties": {
+          "total_vectors": {
+            "type": "integer",
+            "description": "Total number of test vectors."
+          },
+          "p0_count": {
+            "type": "integer",
+            "description": "Number of P0 (must-pass) vectors."
+          },
+          "category_counts": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" },
+            "description": "Vector count per category."
+          },
+          "format_coverage": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" },
+            "description": "Number of vectors exercising each format (A through G)."
+          },
+          "isa_distribution": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" },
+            "description": "Number of vectors per ISA version."
+          }
+        }
+      }
+    }
+  },
+
+  "# === DOCUMENT 4: RUNTIME DESCRIPTOR ===": "See RuntimeDescriptor below.",
+
+  "RuntimeDescriptor": {
+    "title": "FLUX Runtime Descriptor",
+    "description": "Self-reported capabilities of a FLUX runtime implementation. Published by the runtime repo and consumed by the conformance framework to determine which vectors to run.",
+    "type": "object",
+    "required": ["runtime_name", "runtime_version", "language", "isa_versions", "formats", "features"],
+    "properties": {
+      "runtime_name": {
+        "type": "string",
+        "description": "Canonical runtime name (e.g., 'flux-runtime', 'flux-core', 'flux-os', 'flux-swarm')."
+      },
+      "runtime_version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+",
+        "description": "Semver version of the runtime."
+      },
+      "language": {
+        "type": "string",
+        "description": "Implementation language (e.g., 'Python', 'Rust', 'C', 'Go', 'Zig', 'JavaScript')."
+      },
+      "repository_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "URL of the runtime's source repository."
+      },
+      "isa_versions": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/isa_version" },
+        "minItems": 1,
+        "description": "ISA versions this runtime supports."
+      },
+      "formats": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["format", "size_bytes"],
+          "properties": {
+            "format": { "$ref": "#/definitions/encoding_format" },
+            "size_bytes": {
+              "type": ["integer", "null"],
+              "description": "Fixed byte size of this format, or null for variable-length (e.g., Format G)."
+            }
+          }
+        },
+        "description": "Instruction formats implemented, with their byte sizes."
+      },
+      "features": {
+        "type": "object",
+        "required": ["a2a", "simd", "regions", "float"],
+        "properties": {
+          "a2a": {
+            "type": "boolean",
+            "description": "Supports A2A protocol operations (TELL, ASK, DELEGATE, BROADCAST)."
+          },
+          "simd": {
+            "type": "boolean",
+            "description": "Supports SIMD/vector operations."
+          },
+          "regions": {
+            "type": "boolean",
+            "description": "Supports named memory regions (REGION_CREATE, REGION_DESTROY)."
+          },
+          "float": {
+            "type": "boolean",
+            "description": "Supports floating-point operations."
+          },
+          "jit": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the runtime has JIT compilation (affects timing comparisons)."
+          },
+          "error_types": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Error types the runtime can produce (e.g., 'DivisionByZero', 'StackOverflow')."
+          }
+        }
+      },
+      "registers": {
+        "type": "object",
+        "properties": {
+          "gp_count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of general-purpose registers."
+          },
+          "fp_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of floating-point registers."
+          }
+        }
+      },
+      "runner_command": {
+        "type": "string",
+        "description": "Command to invoke the conformance runner (e.g., 'python runners/python/run_conformance.py --json')."
+      },
+      "float_tolerance": {
+        "type": "number",
+        "default": 1e-6,
+        "description": "Default floating-point comparison tolerance for this runtime."
+      }
+    }
+  },
+
+  "# === DOCUMENT 5: CONFORMANCE REPORT ===": "See ConformanceReport below.",
+
+  "ConformanceReport": {
+    "title": "FLUX Conformance Report",
+    "description": "Aggregated summary of conformance test results across one or more runtimes. Produced by collecting TestRunResult objects from individual runtime CI jobs.",
+    "type": "object",
+    "required": ["report_version", "generated", "suite_manifest_version", "runtime_reports", "summary"],
+    "properties": {
+      "report_version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+$",
+        "description": "Version of this report schema format."
+      },
+      "generated": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp when this report was generated."
+      },
+      "suite_manifest_version": {
+        "type": "string",
+        "description": "The manifest_version of the test suite used for this report."
+      },
+      "runtime_reports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["runtime_name", "runtime_version", "isa_version", "results", "statistics"],
+          "properties": {
+            "runtime_name": {
+              "type": "string"
+            },
+            "runtime_version": {
+              "type": "string"
+            },
+            "isa_version": {
+              "$ref": "#/definitions/isa_version"
+            },
+            "language": {
+              "type": "string"
+            },
+            "results": {
+              "type": "array",
+              "items": { "$ref": "#/TestRunResult" }
+            },
+            "statistics": {
+              "type": "object",
+              "required": ["total", "passed", "failed", "skipped", "errors", "pass_rate", "duration_total_ms"],
+              "properties": {
+                "total": { "type": "integer" },
+                "passed": { "type": "integer" },
+                "failed": { "type": "integer" },
+                "skipped": { "type": "integer" },
+                "errors": { "type": "integer" },
+                "pass_rate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Pass rate as percentage (passed / (total - skipped - errors) * 100)."
+                },
+                "duration_total_ms": { "type": "number" },
+                "duration_median_ms": { "type": "number" },
+                "duration_p99_ms": { "type": "number" },
+                "memory_peak_bytes": {
+                  "type": ["integer", "null"],
+                  "description": "Peak memory usage across all test runs, if measured."
+                },
+                "category_breakdown": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "total": { "type": "integer" },
+                      "passed": { "type": "integer" },
+                      "failed": { "type": "integer" }
+                    }
+                  },
+                  "description": "Pass/fail counts broken down by test category."
+                },
+                "failed_vector_ids": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "IDs of vectors that failed (verdict = FAIL)."
+                },
+                "skipped_vector_ids": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "IDs of vectors that were skipped."
+                }
+              }
+            },
+            "certification": {
+              "type": "object",
+              "required": ["p0_pass", "full_pass", "conformant"],
+              "properties": {
+                "p0_pass": {
+                  "type": "boolean",
+                  "description": "Whether all P0 vectors passed."
+                },
+                "full_pass": {
+                  "type": "boolean",
+                  "description": "Whether 95%+ of the full suite passed."
+                },
+                "conformant": {
+                  "type": "boolean",
+                  "description": "FLUX Conformant badge: true if p0_pass AND full_pass."
+                }
+              }
+            }
+          }
+        },
+        "description": "Per-runtime conformance results."
+      },
+      "summary": {
+        "type": "object",
+        "required": ["total_runtimes", "conformant_runtimes", "cross_runtime_consistent"],
+        "properties": {
+          "total_runtimes": {
+            "type": "integer",
+            "description": "Number of runtimes included in this report."
+          },
+          "conformant_runtimes": {
+            "type": "integer",
+            "description": "Number of runtimes achieving FLUX Conformant status."
+          },
+          "cross_runtime_consistent": {
+            "type": "boolean",
+            "description": "Whether all conformant runtimes produce identical results for every vector."
+          },
+          "divergences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["vector_id", "runtimes", "difference"],
+              "properties": {
+                "vector_id": { "type": "string" },
+                "runtimes": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Runtime names involved in the divergence."
+                },
+                "difference": {
+                  "type": "string",
+                  "description": "Description of the divergence (e.g., 'flux-core returned R0=6, flux-runtime returned R0=7')."
+                }
+              }
+            },
+            "description": "List of vectors where conformant runtimes disagree, indicating a specification ambiguity or implementation divergence."
+          },
+          "isa_migration_status": {
+            "type": "object",
+            "properties": {
+              "v1_conformance": {
+                "type": "string",
+                "description": "Overall pass rate for isa-v1 across all runtimes."
+              },
+              "v2_conformance": {
+                "type": "string",
+                "description": "Overall pass rate for isa-v2 across all runtimes."
+              },
+              "vectors_available_v2": {
+                "type": "integer",
+                "description": "Number of vectors that have isa-v2 encodings."
+              }
+            },
+            "description": "ISA migration progress tracking."
+          }
+        }
+      }
+    }
+  }
+}

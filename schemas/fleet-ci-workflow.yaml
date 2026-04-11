@@ -1,0 +1,415 @@
+# fleet-ci-workflow.yaml — Standard Fleet CI/CD Pipeline
+# Copy to .github/workflows/fleet-ci.yaml in every fleet repo
+# Reads configuration from fleet.json at repo root
+
+name: Fleet CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Nightly audit at 04:00 UTC (8PM Alaska time)
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}  # Allow manual trigger
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # =========================================================================
+  # STAGE 1: Validate fleet.json metadata
+  # =========================================================================
+  validate-metadata:
+    name: "Validate fleet.json"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check fleet.json exists
+        id: check_file
+        run: |
+          if [ ! -f "fleet.json" ]; then
+            echo "::error::fleet.json not found. Every fleet repo must include fleet.json at its root."
+            echo "See: https://github.com/SuperInstance/fleet-mechanic/blob/main/schemas/fleet-repo-template.json"
+            exit 1
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate JSON syntax
+        if: steps.check_file.outputs.found == 'true'
+        run: |
+          python3 -c "
+          import json, sys
+          try:
+              with open('fleet.json') as f:
+                  data = json.load(f)
+              print(f'fleet.json valid: schema_version={data.get(\"schema_version\", \"MISSING\")}')
+              print(f'  repo.name={data.get(\"repo\", {}).get(\"name\", \"MISSING\")}')
+              print(f'  runtime.primary_language={data.get(\"runtime\", {}).get(\"primary_language\", \"MISSING\")}')
+              print(f'  test_config.test_command={data.get(\"test_config\", {}).get(\"test_command\", \"MISSING\")}')
+          except json.JSONDecodeError as e:
+              print(f'::error::fleet.json is not valid JSON: {e}')
+              sys.exit(1)
+          except Exception as e:
+              print(f'::error::fleet.json parse error: {e}')
+              sys.exit(1)
+          "
+
+      - name: Validate schema_version
+        if: steps.check_file.outputs.found == 'true'
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('fleet.json')).get('schema_version', ''))")
+          if [ "$VERSION" != "1.0.0" ]; then
+            echo "::warning::fleet.json schema_version is '$VERSION', expected '1.0.0'. Consider updating."
+          fi
+
+      - name: Check required fields
+        if: steps.check_file.outputs.found == 'true'
+        run: |
+          python3 -c "
+          import json, sys
+          data = json.load(open('fleet.json'))
+          required = [
+              ('repo.name', ['repo', 'name']),
+              ('repo.description', ['repo', 'description']),
+              ('repo.owner', ['repo', 'owner']),
+              ('runtime.primary_language', ['runtime', 'primary_language']),
+              ('test_config.test_command', ['test_config', 'test_command']),
+          ]
+          missing = []
+          for label, path in required:
+              obj = data
+              for key in path:
+                  if isinstance(obj, dict) and key in obj:
+                      obj = obj[key]
+                  else:
+                      missing.append(label)
+                      break
+          if missing:
+              print(f'::error::fleet.json missing required fields: {missing}')
+              sys.exit(1)
+          print('All required fields present.')
+          "
+
+  # =========================================================================
+  # STAGE 2: Language-detection and lint/typecheck
+  # =========================================================================
+  lint-and-typecheck:
+    name: "Lint & Type Check"
+    needs: validate-metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect language from fleet.json
+        id: lang
+        run: |
+          LANG=$(python3 -c "import json; print(json.load(open('fleet.json')).get('runtime', {}).get('primary_language', 'unknown'))")
+          echo "language=$LANG" >> "$GITHUB_OUTPUT"
+          echo "Detected primary language: $LANG"
+
+      # ---------- Python ----------
+      - name: Setup Python
+        if: steps.lang.outputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+        continue-on-error: true
+
+      - name: Install ruff (Python linter)
+        if: steps.lang.outputs.language == 'python'
+        run: pip install ruff
+
+      - name: Ruff lint (Python)
+        if: steps.lang.outputs.language == 'python'
+        run: |
+          if [ -f "pyproject.toml" ] || [ -f "ruff.toml" ] || [ -f ".ruff.toml" ]; then
+            ruff check src/ tests/ --output-format=github
+          else
+            echo "::warning::No ruff config found. Running with defaults."
+            ruff check src/ tests/ --output-format=github --ignore=E501
+          fi
+
+      - name: Python type check (mypy)
+        if: steps.lang.outputs.language == 'python'
+        run: |
+          pip install mypy
+          STRICT=$(python3 -c "import json; print(json.load(open('fleet.json')).get('quality_gates', {}).get('type_check_strict', True))")
+          if [ "$STRICT" = "True" ]; then
+            mypy src/ --strict --ignore-missing-imports || true
+          else
+            mypy src/ --ignore-missing-imports || true
+          fi
+        continue-on-error: true
+
+      # ---------- Rust ----------
+      - name: Setup Rust
+        if: steps.lang.outputs.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo fmt (Rust)
+        if: steps.lang.outputs.language == 'rust'
+        run: cargo fmt -- --check
+
+      - name: Cargo clippy (Rust)
+        if: steps.lang.outputs.language == 'rust'
+        run: cargo clippy -- -D warnings
+
+      # ---------- TypeScript ----------
+      - name: Setup Node.js
+        if: steps.lang.outputs.language == 'typescript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: TypeScript lint + type check
+        if: steps.lang.outputs.language == 'typescript'
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+          fi
+          npx tsc --noEmit --strict || true
+          if [ -f ".eslintrc.json" ] || [ -f ".eslintrc.js" ] || [ -f "eslint.config.js" ]; then
+            npx eslint src/ --format github || true
+          else
+            echo "::warning::No eslint config found. Skipping lint."
+          fi
+
+      # ---------- Go ----------
+      - name: Setup Go
+        if: steps.lang.outputs.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+        continue-on-error: true
+
+      - name: Go vet + lint
+        if: steps.lang.outputs.language == 'go'
+        run: |
+          go vet ./...
+          command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || echo "::warning::golangci-lint not installed, skipping"
+
+      # ---------- Unknown / unsupported ----------
+      - name: Skip for unsupported language
+        if: steps.lang.outputs.language == 'unknown' || steps.lang.outputs.language == 'cuda' || steps.lang.outputs.language == 'shell'
+        run: |
+          echo "::warning::Lint/type-check not configured for '${{ steps.lang.outputs.language }}'. Manual QA required."
+
+  # =========================================================================
+  # STAGE 3: Run tests
+  # =========================================================================
+  run-tests:
+    name: "Run Tests"
+    needs: [validate-metadata, lint-and-typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read test config from fleet.json
+        id: test_cfg
+        run: |
+          TEST_CMD=$(python3 -c "import json; print(json.load(open('fleet.json')).get('test_config', {}).get('test_command', ''))")
+          MIN_TESTS=$(python3 -c "import json; print(json.load(open('fleet.json')).get('test_config', {}).get('minimum_test_count', 3))")
+          MAX_DURATION=$(python3 -c "import json; print(json.load(open('fleet.json')).get('quality_gates', {}).get('max_test_duration_seconds', 600))")
+          echo "test_command=$TEST_CMD" >> "$GITHUB_OUTPUT"
+          echo "minimum_test_count=$MIN_TESTS" >> "$GITHUB_OUTPUT"
+          echo "max_duration=$MAX_DURATION" >> "$GITHUB_OUTPUT"
+          echo "Test command: $TEST_CMD (min $MIN_TESTS tests, max ${MAX_DURATION}s)"
+
+      - name: Setup language runtime
+        id: runtime_setup
+        run: |
+          LANG=$(python3 -c "import json; print(json.load(open('fleet.json')).get('runtime', {}).get('primary_language', 'unknown'))")
+          case "$LANG" in
+            python)
+              python3 --version
+              pip install pytest pytest-cov 2>/dev/null || true
+              ;;
+            rust)
+              rustc --version
+              ;;
+            typescript|javascript)
+              node --version
+              if [ -f "package.json" ]; then npm ci 2>/dev/null || npm install; fi
+              ;;
+            go)
+              go version
+              ;;
+            *)
+              echo "No special runtime setup for '$LANG'"
+              ;;
+          esac
+
+      - name: Run test suite
+        id: tests
+        run: |
+          TEST_CMD="${{ steps.test_cfg.outputs.test_command }}"
+          if [ -z "$TEST_CMD" ]; then
+            echo "::error::test_command is empty in fleet.json. Cannot run tests."
+            exit 1
+          fi
+          echo "Running: $TEST_CMD"
+          # Run tests and capture output
+          set +e
+          timeout ${{ steps.test_cfg.outputs.max_duration }} bash -c "$TEST_CMD" 2>&1 | tee test-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Test suite failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+          echo "Tests passed."
+
+      - name: Check minimum test count
+        run: |
+          MIN="${{ steps.test_cfg.outputs.minimum_test_count }}"
+          LANG=$(python3 -c "import json; print(json.load(open('fleet.json')).get('runtime', {}).get('primary_language', 'unknown'))")
+          # Attempt to count tests
+          COUNT=0
+          case "$LANG" in
+            python)
+              if command -v pytest >/dev/null 2>&1; then
+                COUNT=$(pytest --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= test)' || echo "0")
+              fi
+              ;;
+            rust)
+              COUNT=$(cargo test -- --list 2>/dev/null | grep -c "tests$" || echo "0")
+              ;;
+            go)
+              COUNT=$(go test ./... -list '.' 2>/dev/null | wc -l || echo "0")
+              ;;
+            typescript|javascript)
+              if [ -f "package.json" ]; then
+                COUNT=$(npm test -- --listTests 2>/dev/null | wc -l || echo "0")
+              fi
+              ;;
+          esac
+          echo "Detected $COUNT tests (minimum: $MIN)"
+          if [ "$COUNT" -lt "$MIN" ] && [ "$MIN" -gt 0 ]; then
+            echo "::warning::Test count ($COUNT) is below minimum ($MIN). Consider adding more tests."
+            # Warning only — don't block on test count for gradual adoption
+          fi
+
+  # =========================================================================
+  # STAGE 4: Coverage measurement
+  # =========================================================================
+  coverage:
+    name: "Coverage Check"
+    needs: [validate-metadata, run-tests]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.validate-metadata.result == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read coverage config
+        id: cov_cfg
+        run: |
+          COV_CMD=$(python3 -c "import json; print(json.load(open('fleet.json')).get('test_config', {}).get('coverage_command', ''))")
+          MIN_COV=$(python3 -c "import json; print(json.load(open('fleet.json')).get('test_config', {}).get('minimum_coverage', 60))")
+          echo "coverage_command=$COV_CMD" >> "$GITHUB_OUTPUT"
+          echo "minimum_coverage=$MIN_COV" >> "$GITHUB_OUTPUT"
+          echo "Coverage command: $COV_CMD (threshold: ${MIN_COV}%)"
+
+      - name: Setup language runtime
+        run: |
+          LANG=$(python3 -c "import json; print(json.load(open('fleet.json')).get('runtime', {}).get('primary_language', 'unknown'))")
+          case "$LANG" in
+            python) pip install pytest pytest-cov 2>/dev/null || true ;;
+            rust) cargo install cargo-tarpaulin 2>/dev/null || true ;;
+            typescript|javascript)
+              node --version
+              if [ -f "package.json" ]; then npm ci 2>/dev/null || npm install; fi
+              ;;
+          esac
+
+      - name: Run coverage
+        id: cov_run
+        run: |
+          COV_CMD="${{ steps.cov_cfg.outputs.coverage_command }}"
+          if [ -z "$COV_CMD" ]; then
+            echo "::warning::No coverage_command defined in fleet.json. Skipping coverage check."
+            echo "measured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set +e
+          bash -c "$COV_CMD" 2>&1 | tee coverage-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+
+          # Extract percentage from common output formats
+          COV_PCT=$(grep -oP '\d+(?=%)' coverage-output.txt | tail -1 || echo "0")
+          if [ -z "$COV_PCT" ]; then COV_PCT=0; fi
+          echo "coverage_percent=$COV_PCT" >> "$GITHUB_OUTPUT"
+          echo "measured=true" >> "$GITHUB_OUTPUT"
+          echo "## Coverage Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "**${COV_PCT}%** coverage (threshold: ${{ steps.cov_cfg.outputs.minimum_coverage }}%)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$COV_PCT" -lt "${{ steps.cov_cfg.outputs.minimum_coverage }}" ]; then
+            echo "::error::Coverage ${COV_PCT}% is below threshold ${{ steps.cov_cfg.outputs.minimum_coverage }}%"
+            exit 1
+          fi
+
+  # =========================================================================
+  # STAGE 5: Fleet health report (always runs)
+  # =========================================================================
+  fleet-report:
+    name: "Fleet Health Report"
+    needs: [validate-metadata, lint-and-typecheck, run-tests, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate summary
+        run: |
+          echo "## Fleet CI Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Metadata validation
+          case "${{ needs.validate-metadata.result }}" in
+            success) echo "- [x] fleet.json validation" >> "$GITHUB_STEP_SUMMARY" ;;
+            failure) echo "- [FAIL] fleet.json validation" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)       echo "- [SKIP] fleet.json validation" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
+          # Lint/typecheck
+          case "${{ needs.lint-and-typecheck.result }}" in
+            success) echo "- [x] Lint & type check" >> "$GITHUB_STEP_SUMMARY" ;;
+            failure) echo "- [FAIL] Lint & type check" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)       echo "- [SKIP] Lint & type check" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
+          # Tests
+          case "${{ needs.run-tests.result }}" in
+            success) echo "- [x] Tests passed" >> "$GITHUB_STEP_SUMMARY" ;;
+            failure) echo "- [FAIL] Tests failed" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)       echo "- [SKIP] Tests" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
+          # Coverage
+          case "${{ needs.coverage.result }}" in
+            success) echo "- [x] Coverage threshold met" >> "$GITHUB_STEP_SUMMARY" ;;
+            failure) echo "- [FAIL] Coverage below threshold" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)       echo "- [SKIP] Coverage" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "*Pipeline: fleet-ci v1.0 | Repo: ${{ github.repository }} | SHA: ${{ github.sha }}*" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload fleet report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fleet-ci-report
+          path: |
+            test-output.txt
+            coverage-output.txt
+          retention-days: 14
+          if-no-files-found: ignore

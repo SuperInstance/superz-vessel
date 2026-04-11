@@ -1,0 +1,369 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/SuperInstance/fleet-mechanic/main/schemas/fleet-repo-template.json",
+  "title": "Fleet Repo Metadata (fleet.json)",
+  "description": "Standard metadata file that every SuperInstance fleet repo must include at its root. Defines repo identity, runtime requirements, test configuration, quality gates, and A2A/ISA conformance.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "repo",
+    "runtime",
+    "test_config",
+    "quality_gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version of the fleet.json schema this file conforms to."
+    },
+    "repo": {
+      "type": "object",
+      "description": "Core repository identity and status.",
+      "required": ["name", "description", "owner", "health_status"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Repository name (should match GitHub repo name).",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this repo does.",
+          "minLength": 10,
+          "maxLength": 500
+        },
+        "owner": {
+          "type": "string",
+          "description": "Primary agent or team responsible for this repo.",
+          "minLength": 1
+        },
+        "health_status": {
+          "type": "string",
+          "enum": ["GREEN", "YELLOW", "RED", "DEAD"],
+          "description": "Current fleet health status. GREEN=active+tested, YELLOW=stale, RED=placeholder, DEAD=fork."
+        },
+        "last_audit_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date of last fleet-mechanic audit in YYYY-MM-DD format."
+        },
+        "ecosystem": {
+          "type": "string",
+          "description": "Fleet ecosystem this repo belongs to (e.g., 'FLUX Core', 'CUDA / cudaclaw', 'Fleet Infrastructure').",
+          "minLength": 1
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "GitHub topics/tags for discoverability.",
+          "maxItems": 20
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "description": "Runtime environment requirements. At least one language must be specified.",
+      "required": ["primary_language"],
+      "additionalProperties": false,
+      "properties": {
+        "primary_language": {
+          "type": "string",
+          "enum": ["python", "rust", "typescript", "go", "javascript", "c", "zig", "java", "shell", "cuda"],
+          "description": "Primary programming language of the repo."
+        },
+        "python_version": {
+          "type": "string",
+          "pattern": "^3\\.(\\d+)\\.(\\d+)$",
+          "description": "Required Python version, e.g., '3.12.0'."
+        },
+        "rust_edition": {
+          "type": "string",
+          "enum": ["2018", "2021", "2024"],
+          "description": "Rust edition if this is a Rust project."
+        },
+        "go_version": {
+          "type": "string",
+          "pattern": "^1\\.(\\d+)(\\.(\\d+))?$",
+          "description": "Required Go version, e.g., '1.22'."
+        },
+        "node_version": {
+          "type": "string",
+          "pattern": "^(\\d+)\\.(\\d+)\\.(\\d+)$",
+          "description": "Required Node.js version, e.g., '20.11.0'."
+        },
+        "additional_languages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["python", "rust", "typescript", "go", "javascript", "c", "zig", "java", "shell", "cuda"]
+          },
+          "description": "Secondary languages used in this repo.",
+          "maxItems": 5
+        }
+      }
+    },
+    "test_config": {
+      "type": "object",
+      "description": "How tests are run and coverage is measured.",
+      "required": ["test_command"],
+      "additionalProperties": false,
+      "properties": {
+        "test_command": {
+          "type": "string",
+          "description": "Shell command to run the test suite. Examples: 'pytest', 'cargo test', 'npm test', 'go test ./...'.",
+          "minLength": 1
+        },
+        "coverage_command": {
+          "type": "string",
+          "description": "Shell command to measure code coverage. Examples: 'pytest --cov=src --cov-report=xml', 'cargo tarpaulin --out Xml'.",
+          "minLength": 1
+        },
+        "minimum_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 60,
+          "description": "Minimum line coverage percentage required to pass the coverage gate."
+        },
+        "minimum_test_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3,
+          "description": "Minimum number of tests required to pass the test-count gate."
+        },
+        "test_directory": {
+          "type": "string",
+          "default": "tests",
+          "description": "Directory where test files are located."
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "Dependency declarations, both internal fleet deps and external packages.",
+      "additionalProperties": false,
+      "properties": {
+        "fleet_internal": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["repo", "version"],
+            "additionalProperties": false,
+            "properties": {
+              "repo": {
+                "type": "string",
+                "description": "Name of the fleet repo this depends on."
+              },
+              "version": {
+                "type": ["string", "null"],
+                "description": "Git ref, tag, or commit SHA. Use 'main' for latest."
+              },
+              "purpose": {
+                "type": "string",
+                "description": "Why this dependency exists."
+              }
+            }
+          },
+          "description": "Internal fleet repos this repo depends on."
+        },
+        "external": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "version"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Package name."
+              },
+              "version": {
+                "type": "string",
+                "description": "Version constraint (e.g., '>=1.0.0', '^2.3.0')."
+              },
+              "package_manager": {
+                "type": "string",
+                "enum": ["pip", "npm", "cargo", "go-modules", "maven", "zig-build", "apt", "brew"],
+                "description": "Package manager for this dependency."
+              }
+            }
+          },
+          "description": "External third-party dependencies."
+        }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "description": "CI/CD configuration for this repo.",
+      "additionalProperties": false,
+      "properties": {
+        "workflows": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["fleet-ci", "fleet-audit", "fleet-deploy", "isa-conformance", "custom"]
+          },
+          "description": "Which CI workflows to run. 'fleet-ci' is the standard pipeline."
+        },
+        "schedule": {
+          "type": "object",
+          "description": "Scheduled CI runs (cron-style).",
+          "additionalProperties": false,
+          "properties": {
+            "audit_frequency": {
+              "type": "string",
+              "enum": ["daily", "weekly", "biweekly", "monthly"],
+              "default": "weekly",
+              "description": "How often the fleet-mechanic should audit this repo."
+            },
+            "nightly_test": {
+              "type": "boolean",
+              "default": false,
+              "description": "Run the full test suite nightly in addition to on-push."
+            }
+          }
+        },
+        "merge_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "require_ci_pass": {
+              "type": "boolean",
+              "default": true,
+              "description": "Require all CI checks to pass before merging."
+            },
+            "require_review": {
+              "type": "boolean",
+              "default": true,
+              "description": "Require at least one review before merging."
+            },
+            "required_reviewers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 1,
+              "description": "Number of required approving reviews."
+            }
+          }
+        }
+      }
+    },
+    "quality_gates": {
+      "type": "object",
+      "description": "Quality thresholds that must pass for CI to succeed.",
+      "additionalProperties": false,
+      "properties": {
+        "coverage_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 60,
+          "description": "Minimum line coverage percentage."
+        },
+        "lint_strict": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true, linting errors and warnings both cause CI failure."
+        },
+        "type_check_strict": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true, type checking runs in strict mode."
+        },
+        "max_test_duration_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600,
+          "description": "Maximum allowed test suite runtime in seconds. CI fails if exceeded."
+        },
+        "max_binary_size_kb": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum compiled binary size in KB. Used for runtime/binary repos."
+        },
+        "health_grade_target": {
+          "type": "string",
+          "enum": ["A", "B", "C"],
+          "default": "B",
+          "description": "Target health grade. The fleet-mechanic will flag if the repo drops below this."
+        }
+      }
+    },
+    "conformance": {
+      "type": "object",
+      "description": "ISA and protocol conformance declarations.",
+      "additionalProperties": false,
+      "properties": {
+        "isa_version": {
+          "type": ["string", "null"],
+          "description": "FLUX ISA version this repo targets (e.g., '2.0.0-draft', '1.0.0'). Null if not applicable."
+        },
+        "a2a_protocol_version": {
+          "type": ["string", "null"],
+          "description": "A2A Signal Protocol version supported (e.g., '1.0.0'). Null if not applicable."
+        },
+        "i2i_compliant": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether this repo follows Iron-to-Iron communication protocols."
+        }
+      }
+    },
+    "a2a": {
+      "type": "object",
+      "description": "Agent-to-Agent capabilities and opcode declarations.",
+      "additionalProperties": false,
+      "properties": {
+        "opcodes_implemented": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["opcode", "mnemonic"],
+            "additionalProperties": false,
+            "properties": {
+              "opcode": {
+                "type": ["integer", "string"],
+                "description": "Numeric opcode value (0x00-0xFF) or string identifier."
+              },
+              "mnemonic": {
+                "type": "string",
+                "description": "Assembly mnemonic (e.g., 'NOP', 'PUSH', 'SIGNAL')."
+              },
+              "since_version": {
+                "type": "string",
+                "description": "ISA version this opcode was introduced."
+              }
+            }
+          },
+          "description": "FLUX bytecode opcodes this repo's VM implements."
+        },
+        "opcodes_used": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Opcodes that this repo's test programs or tooling depend on."
+        },
+        "signal_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "A2A signal types this repo can send/receive (e.g., 'ping', 'task_request', 'status_report')."
+        },
+        "agent_role": {
+          "type": "string",
+          "enum": ["runtime", "tool", "library", "orchestrator", "sensor", "effector", "full_agent"],
+          "description": "Role this repo plays in the A2A ecosystem."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "health_grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Fleet health grade. A=excellent, B=good, C=needs work, D=at risk."
+    }
+  }
+}

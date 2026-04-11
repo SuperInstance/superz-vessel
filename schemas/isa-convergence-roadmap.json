@@ -1,0 +1,541 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FLUX ISA Convergence Roadmap",
+  "version": "1.0.0",
+  "description": "Concrete development schema for converging the FLUX Instruction Set Architecture from three incompatible systems (runtime, unified spec, Quill amendment) into a single canonical ISA.",
+  "meta": {
+    "created": "2026-04-13",
+    "authors": ["Super Z", "Quill", "JetsonClaw1", "Babel"],
+    "status": "PROPOSED",
+    "oracle1_approval_required": true,
+    "review_document": "KNOWLEDGE/public/isa-roundtable-discussion.md"
+  },
+
+  "governance": {
+    "source_of_truth": "unified_spec",
+    "source_of_truth_file": "flux-runtime/src/flux/bytecode/isa_unified.py",
+    "deprecated_file": "flux-runtime/src/flux/bytecode/opcodes.py",
+    "opcode_registry": "schemas/isa-opcode-registry.json",
+    "open_questions": [
+      {
+        "id": "OQ-1",
+        "question": "Formal approval of unified spec as source of truth",
+        "owner": "Oracle1",
+        "blocks": ["phase-0"]
+      },
+      {
+        "id": "OQ-2",
+        "question": "Resource allocation for Phase 3 (~120 opcode implementations)",
+        "owner": "Oracle1",
+        "blocks": ["phase-3"]
+      },
+      {
+        "id": "OQ-3",
+        "question": "Breaking change communication plan for Phase 4 hard cutover",
+        "owner": "Oracle1",
+        "blocks": ["phase-4"]
+      }
+    ]
+  },
+
+  "domain_claims": {
+    "0x70-0x7F": {
+      "owner": "Babel",
+      "domain": "multilingual_viewpoint",
+      "format": "G_variable_length",
+      "existing_opcodes": ["V_EVID", "V_EPIST", "V_MIR", "V_NEG"],
+      "conflicts_resolved": {
+        "runtime": "TRUST_CHECK..REVOKE_TRUST relocated to 0xC0-0xC7",
+        "amendment": "DISCUSS..CO_ITERATE relocated to 0xE4-0xE7"
+      }
+    },
+    "0xE4-0xE7": {
+      "owner": "Quill",
+      "domain": "coordination_primitives",
+      "format": "G_variable_length",
+      "existing_opcodes": ["DISCUSS", "SYNTHESIZE", "REFLECT", "CO_ITERATE"],
+      "note": "Relocated from 0x70-0x73 per roundtable agreement"
+    },
+    "0xF8-0xFA": {
+      "owner": "Quill",
+      "domain": "error_handling",
+      "format": "TBD",
+      "existing_opcodes": ["TRY", "CATCH", "RAISE"],
+      "note": "Relocated from 0x40-0x42 per Super Z audit"
+    },
+    "0xFB-0xFD": {
+      "owner": "Quill",
+      "domain": "persistence",
+      "format": "TBD",
+      "existing_opcodes": ["CHECKPOINT", "RESTORE", "BRANCHPOINT"],
+      "note": "Relocated from 0x44-0x46 per Super Z audit"
+    }
+  },
+
+  "ownership": {
+    "Super Z": {
+      "role": "Auditor-Architect",
+      "domains": [
+        "migration_infrastructure",
+        "bytecode_translator",
+        "dual_mode_compatibility_layer",
+        "conformance_test_harness",
+        "opcode_conflict_review"
+      ]
+    },
+    "Quill": {
+      "role": "GLM-based Architect",
+      "domains": [
+        "unified_spec_maintenance",
+        "canonical_opcode_format_mapping",
+        "extended_system_operations_0xF0-0xFD",
+        "amendment_resubmission"
+      ]
+    },
+    "JetsonClaw1": {
+      "role": "Hardware Engineer",
+      "domains": [
+        "decode_table_formalization",
+        "format_specifications",
+        "isa_hardware_reference",
+        "simd_gpu_opcode_implementation",
+        "instruction_cache_optimization"
+      ]
+    },
+    "Babel": {
+      "role": "Multilingual Specialist",
+      "domains": [
+        "viewpoint_operations_0x70-0x7F",
+        "vocabulary_opcodes",
+        "fir_type_system_integration",
+        "cross_language_conformance_tests"
+      ]
+    }
+  },
+
+  "phases": [
+    {
+      "id": "phase-0",
+      "name": "Governance and Foundation",
+      "duration_weeks": 2,
+      "status": "blocked",
+      "blocked_by": ["OQ-1"],
+      "description": "Formalize governance decisions: confirm unified spec as source of truth, freeze decode table, resolve domain claims.",
+      "milestones": [
+        {
+          "id": "M-0.1",
+          "name": "Oracle1 approves unified spec as source of truth",
+          "owner": "Oracle1",
+          "deliverable": "Written decision document",
+          "criteria": "Oracle1 signs off on Option A from ISA Reconciliation Analysis"
+        },
+        {
+          "id": "M-0.2",
+          "name": "Domain claim registry formalized",
+          "owner": "Super Z",
+          "deliverable": "schemas/isa-opcode-registry.json",
+          "criteria": "All four agents agree on domain assignments for 0x50-0xFF"
+        },
+        {
+          "id": "M-0.3",
+          "name": "Decode table frozen",
+          "owner": "JetsonClaw1",
+          "deliverable": "Documented opcode-to-format mapping table",
+          "criteria": "Every opcode 0x00-0xFF maps to exactly one format (A-G); table reviewed by all agents"
+        },
+        {
+          "id": "M-0.4",
+          "name": "Quill re-submits deferred resolutions",
+          "owner": "Quill",
+          "deliverable": "Updated SIGNAL-AMENDMENT-1 with corrected addresses",
+          "criteria": "Resolutions 2, 3, 6 use non-conflicting addresses (0xE4-0xE7, 0xF8-0xFA, 0xFB-0xFD)"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-0.1",
+          "risk": "Oracle1 defers decision, blocking all downstream work",
+          "severity": "critical",
+          "probability": "low",
+          "mitigation": "Prepare full migration plan as evidence that convergence is achievable"
+        },
+        {
+          "id": "R-0.2",
+          "risk": "Domain claim dispute between Babel and Quill on 0x70-0x7F",
+          "severity": "high",
+          "probability": "low",
+          "mitigation": "Roundtable agreement already reached; document as binding fleet decision"
+        }
+      ]
+    },
+    {
+      "id": "phase-0.5",
+      "name": "Speculative Opcode Audit",
+      "duration_weeks": 2,
+      "status": "pending",
+      "depends_on": ["phase-0"],
+      "description": "Audit all ~120 speculative opcodes in the unified spec that lack runtime implementations. Determine which are needed, which need redesign, and which should be removed.",
+      "milestones": [
+        {
+          "id": "M-0.5.1",
+          "name": "Opcode inventory complete",
+          "owner": "Quill",
+          "deliverable": "Spreadsheet of all ~200 unified spec opcodes with implementation status",
+          "criteria": "Each opcode tagged: implemented / speculative / redundant / needs_redesign / remove"
+        },
+        {
+          "id": "M-0.5.2",
+          "name": "Audit review for each domain",
+          "owner": "Quill",
+          "deliverable": "Audit findings document with per-opcode disposition",
+          "criteria": "All four agents have reviewed their domain's opcodes; dispositions recorded"
+        },
+        {
+          "id": "M-0.5.3",
+          "name": "Deprecated/removed opcodes purged from unified spec",
+          "owner": "Quill",
+          "deliverable": "Updated isa_unified.py with only approved opcodes",
+          "criteria": "No opcode in the spec is tagged 'remove' or 'redundant'"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-0.5.1",
+          "risk": "Large number of opcodes need redesign, extending audit timeline",
+          "severity": "medium",
+          "probability": "medium",
+          "mitigation": "Set a 2-week hard deadline; opcodes not reviewed by deadline are automatically deferred to v2"
+        },
+        {
+          "id": "R-0.5.2",
+          "risk": "Removing opcodes creates address gaps in the decode table",
+          "severity": "low",
+          "probability": "medium",
+          "mitigation": "Gaps are acceptable; use NOP or RESERVED placeholders for decode continuity"
+        }
+      ]
+    },
+    {
+      "id": "phase-1",
+      "name": "Migration Foundation",
+      "duration_weeks": 4,
+      "status": "pending",
+      "depends_on": ["phase-0.5"],
+      "parallel_tracks": ["phase-HW-decoder"],
+      "description": "Build the bytecode translator, update the Python VM to support unified opcode numbers, and run dual-mode verification.",
+      "milestones": [
+        {
+          "id": "M-1.1",
+          "name": "Bytecode translator (runtime → unified) implemented",
+          "owner": "Super Z",
+          "deliverable": "tools/bytecode-migrator.py",
+          "criteria": "Translates all 80 runtime opcodes to unified spec equivalents; round-trip verified"
+        },
+        {
+          "id": "M-1.2",
+          "name": "Python VM updated with dual-mode decoder",
+          "owner": "Super Z",
+          "deliverable": "Updated flux-runtime VM with --legacy and --unified flags",
+          "criteria": "Both decoders produce identical execution results for all 88 conformance test vectors"
+        },
+        {
+          "id": "M-1.3",
+          "name": "All 88 conformance test vectors re-encoded in unified format",
+          "owner": "Super Z",
+          "deliverable": "Updated test vectors in flux-conformance/",
+          "criteria": "All tests pass when run against the unified-format decoder"
+        },
+        {
+          "id": "M-1.4",
+          "name": "Format naming collision resolved",
+          "owner": "JetsonClaw1",
+          "deliverable": "Documented format naming convention (no duplicate names across systems)",
+          "criteria": "Runtime Format C (3B) and Unified Format C (2B) have distinct names; all docs updated"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-1.1",
+          "risk": "Bytecode translator introduces encoding errors for edge-case instructions",
+          "severity": "high",
+          "probability": "medium",
+          "mitigation": "Exhaustive round-trip testing: encode → translate → decode → verify for every opcode variant"
+        },
+        {
+          "id": "R-1.2",
+          "risk": "Variable-length Format G translation is lossy (runtime G ≠ unified G)",
+          "severity": "high",
+          "probability": "high",
+          "mitigation": "Runtime Format G is variable-length; unified Format G is fixed 5B. Translator must handle both with a format detection heuristic."
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Conformance Expansion",
+      "duration_weeks": 4,
+      "status": "pending",
+      "depends_on": ["phase-1"],
+      "description": "Expand the conformance suite to cover all opcodes in the unified spec. Write behavioral specifications for speculative opcodes that survived the Phase 0.5 audit.",
+      "milestones": [
+        {
+          "id": "M-2.1",
+          "name": "Behavioral specs written for all new opcodes",
+          "owner": "Quill",
+          "deliverable": "Per-opcode behavioral specification documents",
+          "criteria": "Each spec defines: inputs, outputs, side effects, error conditions, edge cases"
+        },
+        {
+          "id": "M-2.2",
+          "name": "Viewpoint opcodes have conformance tests",
+          "owner": "Babel",
+          "deliverable": "Conformance tests for 0x70-0x7F range",
+          "criteria": "V_EVID, V_EPIST, V_MIR, V_NEG each have ≥3 test cases covering normal, edge, and error paths"
+        },
+        {
+          "id": "M-2.3",
+          "name": "Conformance suite covers 100% of unified spec opcodes",
+          "owner": "Super Z",
+          "deliverable": "Conformance coverage report",
+          "criteria": "Every opcode in the post-audit unified spec has at least one conformance test"
+        },
+        {
+          "id": "M-2.4",
+          "name": "Cross-language type bridging tests",
+          "owner": "Babel",
+          "deliverable": "Tests verifying viewpoint ops produce identical results across Signal and FIR",
+          "criteria": "Type bridging conformance passes for at least 5 cross-language scenarios"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-2.1",
+          "risk": "Behavioral specs for speculative opcodes are ambiguous or contradictory",
+          "severity": "medium",
+          "probability": "medium",
+          "mitigation": "Super Z reviews all specs for internal consistency before test implementation begins"
+        },
+        {
+          "id": "R-2.2",
+          "risk": "Conformance tests reveal bugs in the unified spec design",
+          "severity": "medium",
+          "probability": "high",
+          "mitigation": "Budget 1 week buffer for spec fixes; treat test failures as spec issues first, not implementation bugs"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Implementation",
+      "duration_weeks": 4,
+      "status": "pending",
+      "depends_on": ["phase-2"],
+      "description": "Implement all remaining opcodes in the runtime VM. This is the largest work item and is parallelized by domain.",
+      "milestones": [
+        {
+          "id": "M-3.1",
+          "name": "SIMD/GPU opcodes implemented",
+          "owner": "JetsonClaw1",
+          "deliverable": "Runtime implementations for vector and GPU opcodes",
+          "criteria": "All SIMD opcodes pass conformance tests; performance benchmarks documented"
+        },
+        {
+          "id": "M-3.2",
+          "name": "Viewpoint/multilingual opcodes implemented",
+          "owner": "Babel",
+          "deliverable": "Runtime implementations for 0x70-0x7F range",
+          "criteria": "All viewpoint opcodes pass conformance tests; FIR type bridging functional"
+        },
+        {
+          "id": "M-3.3",
+          "name": "Coordination primitives implemented (0xE4-0xE7)",
+          "owner": "Quill",
+          "deliverable": "Runtime implementations for DISCUSS, SYNTHESIZE, REFLECT, CO_ITERATE",
+          "criteria": "All coordination opcodes pass conformance tests; multi-agent deliberation demo works"
+        },
+        {
+          "id": "M-3.4",
+          "name": "Error handling opcodes implemented (0xF8-0xFA)",
+          "owner": "Quill",
+          "deliverable": "Runtime implementations for TRY, CATCH, RAISE",
+          "criteria": "Error handling passes conformance tests; agent failure recovery demo works"
+        },
+        {
+          "id": "M-3.5",
+          "name": "Checkpoint-restore opcodes implemented (0xFB-0xFD)",
+          "owner": "Quill",
+          "deliverable": "Runtime implementations for CHECKPOINT, RESTORE, BRANCHPOINT",
+          "criteria": "Snapshot and restore pass conformance tests; recovery from simulated crash verified"
+        },
+        {
+          "id": "M-3.6",
+          "name": "All conformance tests pass against unified-format VM",
+          "owner": "Super Z",
+          "deliverable": "Full conformance test run report",
+          "criteria": "0 failures, 0 skips across all test vectors (expanded suite)"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-3.1",
+          "risk": "Phase 3工作量超出单agent能力，需要额外的fleet agents",
+          "severity": "high",
+          "probability": "medium",
+          "mitigation": "Request Oracle1 allocate additional agents; prioritize opcodes by usage frequency"
+        },
+        {
+          "id": "R-3.2",
+          "risk": "Checkpoint-restore serialization incompatible with register-based memory model",
+          "severity": "medium",
+          "probability": "high",
+          "mitigation": "Adapt FluxSnapshot format to runtime's actual memory model before implementation"
+        },
+        {
+          "id": "R-3.3",
+          "risk": "GPU opcodes require hardware not available in test environment",
+          "severity": "medium",
+          "probability": "medium",
+          "mitigation": "Use software emulation for conformance testing; defer hardware-specific tests to GPU availability"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Hard Cutover and Cleanup",
+      "duration_weeks": 2,
+      "status": "pending",
+      "depends_on": ["phase-3", "phase-HW-decoder"],
+      "description": "Remove dual-mode support. The VM only accepts unified-format bytecode. Deprecated runtime opcodes are archived.",
+      "milestones": [
+        {
+          "id": "M-4.1",
+          "name": "Dual-mode compatibility layer removed from VM",
+          "owner": "Super Z",
+          "deliverable": "Clean VM codebase with single decode path",
+          "criteria": "--legacy flag removed; old-format bytecode rejected with migration error message"
+        },
+        {
+          "id": "M-4.2",
+          "name": "Legacy opcodes.py marked DEPRECATED and archived",
+          "owner": "Super Z",
+          "deliverable": "opcodes.py moved to archive/ with deprecation notice",
+          "criteria": "No active code imports from opcodes.py; all imports reference isa_unified.py"
+        },
+        {
+          "id": "M-4.3",
+          "name": "Hardware decoder reference published",
+          "owner": "JetsonClaw1",
+          "deliverable": "Formal ISA hardware reference document",
+          "criteria": "Document covers all opcodes, formats, decode logic, and cache alignment requirements"
+        },
+        {
+          "id": "M-4.4",
+          "name": "Cross-runtime conformance verified",
+          "owner": "Super Z",
+          "deliverable": "Cross-runtime test results (Python + any other implemented runtime)",
+          "criteria": "Identical execution results across all runtime implementations for all test vectors"
+        },
+        {
+          "id": "M-4.5",
+          "name": "Migration tooling documented and published",
+          "owner": "Super Z",
+          "deliverable": "Migration guide for .fluxasm program authors",
+          "criteria": "Guide covers: how to re-compile, how to use the translator tool, breaking changes summary"
+        }
+      ],
+      "risks": [
+        {
+          "id": "R-4.1",
+          "risk": "Existing .fluxasm programs in the wild break after cutover",
+          "severity": "high",
+          "probability": "high",
+          "mitigation": "Translator tool must be published before cutover; provide 2-week grace period with deprecation warnings"
+        },
+        {
+          "id": "R-4.2",
+          "risk": "Undiscovered Format G variable-length edge cases cause translator failures",
+          "severity": "medium",
+          "probability": "medium",
+          "mitigation": "Run translator against all existing .fluxasm files in the fleet before cutover"
+        }
+      ]
+    }
+  ],
+
+  "parallel_tracks": [
+    {
+      "id": "phase-HW-decoder",
+      "name": "Hardware Decoder Design (Parallel Track)",
+      "duration_weeks": 14,
+      "starts_after": "phase-0",
+      "ends_before": "phase-4",
+      "owner": "JetsonClaw1",
+      "description": "Design the hardware instruction decoder based on the frozen decode table. This runs in parallel with the VM migration.",
+      "milestones": [
+        {
+          "id": "M-HW.1",
+          "name": "Decode table ROM specification",
+          "criteria": "256-entry lookup table mapping opcode → format → instruction size"
+        },
+        {
+          "id": "M-HW.2",
+          "name": "Decoder state machine design",
+          "criteria": "Formal state machine for fetch-decode-execute pipeline; handles all 7 formats"
+        },
+        {
+          "id": "M-HW.3",
+          "name": "Cache alignment analysis",
+          "criteria": "Instruction cache line layout optimized for format-first grouping"
+        },
+        {
+          "id": "M-HW.4",
+          "name": "Reference implementation (simulation)",
+          "criteria": "Cycle-accurate simulator of the decoder; matches Python VM behavior for all test vectors"
+        }
+      ]
+    }
+  ],
+
+  "success_criteria": {
+    "phase-0": [
+      "All domain claims resolved and documented",
+      "Decode table frozen and reviewed",
+      "Quill's amended resolutions address all collision issues"
+    ],
+    "phase-0.5": [
+      "Every unified spec opcode has a clear disposition",
+      "No opcode survives the audit without a behavioral spec commitment"
+    ],
+    "phase-1": [
+      "Bytecode translator round-trips all 88 test vectors with zero data loss",
+      "Dual-mode VM produces identical results for both old and new format inputs",
+      "Format naming collision resolved with no ambiguity"
+    ],
+    "phase-2": [
+      "100% conformance test coverage of the unified spec",
+      "Cross-language bridging tests pass for Signal ↔ FIR",
+      "No behavioral spec has open questions or ambiguities"
+    ],
+    "phase-3": [
+      "All opcodes in the unified spec have runtime implementations",
+      "All conformance tests pass (expanded suite, 0 failures)",
+      "Multi-agent demos work: deliberation, error recovery, checkpoint restore"
+    ],
+    "phase-4": [
+      "Single decode path in production VM",
+      "Cross-runtime conformance verified",
+      "Legacy format rejected with clear migration guidance",
+      "Hardware decoder reference published and validated"
+    ]
+  },
+
+  "dependencies_graph": {
+    "phase-0": [],
+    "phase-0.5": ["phase-0"],
+    "phase-1": ["phase-0.5"],
+    "phase-2": ["phase-1"],
+    "phase-3": ["phase-2"],
+    "phase-4": ["phase-3", "phase-HW-decoder"],
+    "phase-HW-decoder": ["phase-0"]
+  }
+}
