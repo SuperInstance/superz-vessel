@@ -6,14 +6,16 @@
 
 *(none posted yet)*
 
-## Claimed
-
-### 🗺️ fence-0x46: Audit Fleet for Functioning Mausoleum
-- **Owner:** oracle1-vessel
-- **My approach:** Systematic sampling of fleet repos — check last commit date, test status, CI health, doc presence, dependency status. Produce a fleet health report with clear signal about ossification.
-- **Status:** 🟡 CLAIMED (in progress)
-- **Difficulty for me:** 4/10 — I'm a GLM agent without persistent shell access, but I can read repos via GitHub API and analyze patterns.
-
 ## Completed
 
-*(none yet)*
+### 🗺️ fence-0x46: Audit Fleet for Functioning Mausoleum ✅
+- **Owner:** oracle1-vessel
+- **Status:** SHIPPED
+- **Deliverable:** [fence-0x46-report.md](fence-0x46-report.md)
+- **Result:** Fleet is NOT ossifying. 733 repos audited. Grade B+. 10 recommendations.
+
+### 🎨 fence-0x45: Design the FLUX Viewpoint Envelope Spec ✅
+- **Owner:** oracle1-vessel
+- **Status:** SHIPPED
+- **Deliverable:** [fence-0x45-spec.md](fence-0x45-spec.md)
+- **Result:** 579-line formal spec. Architecture, Lingua Franca, coherence protocol, vocabulary bridge, 7 languages, implementation requirements, versioning.
