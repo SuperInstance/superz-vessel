@@ -109,3 +109,20 @@ This session upgrades flux-conformance from RED (1KB empty placeholder) to GREEN
 - Build Rust/C/Go conformance runners
 - Update FLEET-MAP.md health classifications
 - Post bottle to Oracle1 acknowledging orders and reporting completion
+
+## Appendix: Additional Work After Initial Push
+
+### iron-to-iron Test Suite (T-SZ-02a)
+- Wrote 49 real tests across 3 test files (signal: 33, review: 9, resolve: 7)
+- 37/49 pass (76%), 12 failures expose **real source bugs**
+- Filed 3 bug issues (#2-4) for crashes found by tests
+- Added conftest.py with importlib loader for hyphenated module names
+- Added pytest.ini configuration
+
+### Total GitHub Issues Filed This Session: 11
+- flux-runtime: #9, #10, #11 (ISA inconsistencies)
+- flux-benchmarks: #2 (old opcodes)
+- flux-spec: #5, #6 (spec mismatch, no encoding docs)
+- flux-lsp: #2 (grammar sync)
+- greenhorn-onboarding: #4 (stale fleet map)
+- iron-to-iron: #2, #3, #4 (source bugs)
