@@ -1,0 +1,339 @@
+# ============================================================================
+# Fleet Bottle Monitor
+# ============================================================================
+# Scans all vessel repos for unread Message-in-a-Bottle (MiB) messages.
+# Flags bottles older than 7 days, summarizes activity in a dashboard, and
+# alerts on critical unread bottles.
+#
+# Required Secrets:
+#   FLEET_TOKEN — PAT with read access to all fleet org repos
+#
+# Schedule: Runs daily at 08:00 UTC
+# ============================================================================
+
+name: Fleet Bottle Monitor
+
+on:
+  schedule:
+    # Every day at 08:00 UTC
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      max_bottle_age_days:
+        description: "Flag bottles unread for more than N days"
+        required: false
+        default: "7"
+        type: string
+      alert_on_critical:
+        description: "Create alert for critical unread bottles"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      scan_all_vessels:
+        description: "Scan all fleet vessels (not just this repo)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  MAX_BOTTLE_AGE_DAYS: 7
+  FLEET_ORG: "superinstance"
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Scan for unread bottles
+  # --------------------------------------------------------------------------
+  scan-bottles:
+    name: 🔍 Scan Bottles
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      total_bottles: ${{ steps.scan.outputs.total }}
+      unread_bottles: ${{ steps.scan.outputs.unread }}
+      stale_bottles: ${{ steps.scan.outputs.stale }}
+      critical_bottles: ${{ steps.scan.outputs.critical }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan local bottles
+        id: scan
+        run: |
+          MAX_AGE=${{ github.event.inputs.max_bottle_age_days || env.MAX_BOTTLE_AGE_DAYS }}
+          echo "🍶 Scanning for bottles (max unread age: ${MAX_AGE} days)..."
+
+          python3 << SCANSCRIPT
+          import json, os, sys, time
+          from datetime import datetime, timezone
+
+          max_age_days = int("${MAX_AGE}")
+          bottles_dir = "bottles"
+          total = 0
+          unread = 0
+          stale = 0
+          critical = 0
+          stale_list = []
+          critical_list = []
+          summary = []
+
+          def parse_bottle_date(ts_str):
+              """Parse ISO timestamp, fall back to epoch."""
+              if not ts_str:
+                  return None
+              try:
+                  # Try ISO format
+                  dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                  return dt
+              except (ValueError, AttributeError):
+                  try:
+                      return datetime.fromtimestamp(float(ts_str), tz=timezone.utc)
+                  except (ValueError, TypeError):
+                      return None
+
+          # Scan local bottles directory
+          if os.path.isdir(bottles_dir):
+              for filename in sorted(os.listdir(bottles_dir)):
+                  if not filename.endswith('.json'):
+                      continue
+                  filepath = os.path.join(bottles_dir, filename)
+                  try:
+                      with open(filepath) as f:
+                          bottle = json.load(f)
+                  except (json.JSONDecodeError, IOError) as e:
+                      print(f"  ⚠️  {filename}: invalid JSON ({e})")
+                      continue
+
+                  total += 1
+                  bottle_id = bottle.get('id', filename)
+                  from_vessel = bottle.get('from_vessel', 'unknown')
+                  is_read = bottle.get('read', False)
+                  timestamp_str = bottle.get('timestamp', '')
+                  priority = bottle.get('priority', 'normal')
+                  payload_type = bottle.get('payload_type', 'message')
+
+                  # Parse timestamp
+                  bottle_date = parse_bottle_date(timestamp_str)
+                  age_days = 0
+                  if bottle_date:
+                      age_days = (datetime.now(timezone.utc) - bottle_date).days
+
+                  if not is_read:
+                      unread += 1
+                      line = f"  📨 Unread: {bottle_id} (from {from_vessel}, {age_days}d old, priority={priority})"
+                      print(line)
+                      summary.append(line)
+
+                      if age_days >= max_age_days:
+                          stale += 1
+                          stale_line = f"    ⚠️  STALE: {age_days} days unread"
+                          print(stale_line)
+                          stale_list.append(f"  - {bottle_id}: {age_days} days old, from {from_vessel}")
+
+                      if priority == 'critical' or priority == 'urgent':
+                          critical += 1
+                          critical_line = f"    🚨 CRITICAL: {bottle_id}"
+                          print(critical_line)
+                          critical_list.append(f"  - {bottle_id}: {priority}, from {from_vessel}, {age_days}d old")
+                  else:
+                      if total <= 20:
+                          print(f"  ✅ Read: {bottle_id}")
+
+          else:
+              print(f"ℹ️  No bottles/ directory found in this vessel")
+
+          # Save results for other jobs
+          results = {
+              'total': total,
+              'unread': unread,
+              'stale': stale,
+              'critical': critical,
+              'stale_list': stale_list,
+              'critical_list': critical_list,
+              'summary': summary,
+              'scanned_at': datetime.now(timezone.utc).isoformat()
+          }
+          with open('bottle-scan-results.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+          print(f"\n📊 Summary: {total} total, {unread} unread, {stale} stale (>{max_age_days}d), {critical} critical")
+
+          # Output for GitHub Actions
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"total={total}\n")
+              f.write(f"unread={unread}\n")
+              f.write(f"stale={stale}\n")
+              f.write(f"critical={critical}\n")
+
+          SCANSCRIPT
+
+      - name: Scan fleet vessels
+        if: (github.event.inputs.scan_all_vessels || 'true') == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN || secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+        run: |
+          echo "🌐 Scanning fleet vessels for bottles..."
+
+          # Get list of fleet repos
+          FLEET_REPOS=$(gh repo list ${{ env.FLEET_ORG }} --limit 50 --json name -q '.[].name' 2>/dev/null || echo "")
+
+          for repo in $FLEET_REPOS; do
+            echo "  Checking ${{ env.FLEET_ORG }}/$repo..."
+            # Check if bottles directory exists and has content
+            gh api "/repos/${{ env.FLEET_ORG }}/$repo/contents/bottles" --jq '.[].name' 2>/dev/null | head -5 | while read bottle; do
+              echo "    🍶 Found: $bottle"
+            done || true
+          done
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bottle-scan-results
+          path: bottle-scan-results.json
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Generate Dashboard Summary
+  # --------------------------------------------------------------------------
+  dashboard:
+    name: 📊 Bottle Dashboard
+    runs-on: ubuntu-latest
+    needs: scan-bottles
+    if: always()
+    steps:
+      - name: Download scan results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bottle-scan-results
+
+      - name: Generate dashboard
+        run: |
+          echo "## 🍶 Fleet Bottle Dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Total Bottles | ${{ needs.scan-bottles.outputs.total_bottles }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📨 Unread | ${{ needs.scan-bottles.outputs.unread_bottles }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚠️  Stale (>${{ github.event.inputs.max_bottle_age_days || 7 }}d) | ${{ needs.scan-bottles.outputs.stale_bottles }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🚨 Critical | ${{ needs.scan-bottles.outputs.critical_bottles }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.scan-bottles.outputs.stale_bottles }}" != "0" ]; then
+            echo "### ⚠️  Stale Bottles" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          with open('bottle-scan-results.json') as f:
+              data = json.load(f)
+          for item in data.get('stale_list', []):
+              print(item)
+          " 2>/dev/null || echo "No details available"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.scan-bottles.outputs.critical_bottles }}" != "0" ]; then
+            echo "### 🚨 Critical Unread Bottles" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          with open('bottle-scan-results.json') as f:
+              data = json.load(f)
+          for item in data.get('critical_list', []):
+              print(item)
+          " 2>/dev/null || echo "No details available"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Next scan: tomorrow at 08:00 UTC_" >> $GITHUB_STEP_SUMMARY
+
+  # --------------------------------------------------------------------------
+  # Alert on Critical Bottles
+  # --------------------------------------------------------------------------
+  alert:
+    name: 🚨 Critical Alert
+    runs-on: ubuntu-latest
+    needs: scan-bottles
+    if: needs.scan-bottles.outputs.critical_bottles != '0' && (github.event.inputs.alert_on_critical || 'true') == 'true'
+    steps:
+      - name: Download scan results
+        uses: actions/download-artifact@v4
+        with:
+          name: bottle-scan-results
+
+      - name: Create alert issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('bottle-scan-results.json', 'utf8'));
+
+            const criticalItems = data.critical_list || [];
+            const title = `🚨 ${data.critical} Critical Unread Bottle(s) Require Attention`;
+            const body = `## Critical Bottle Alert\n\n` +
+              `**Total Unread:** ${data.unread}\n` +
+              `**Critical:** ${data.critical}\n` +
+              `**Stale:** ${data.stale}\n\n` +
+              `### Critical Bottles:\n` +
+              criticalItems.map(c => `- ${c}`).join('\n') + '\n\n' +
+              `---\n_Auto-generated by Fleet Bottle Monitor_\n` +
+              `_Scanned at: ${data.scanned_at}_`;
+
+            // Check for existing alert issue
+            const issues = await github.rest.issues.listForRepo({
+              ...context.repo,
+              labels: 'bottle-alert',
+              state: 'open',
+              per_page: 5
+            });
+
+            const existing = issues.data.find(i => i.title.includes('Critical Unread Bottle'));
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: `### Update: Still ${data.critical} critical unread bottle(s)\n\n` +
+                  `Run: [${context.runId}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.runId }})`
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: title,
+                body: body,
+                labels: ['bottle-alert', 'urgent', 'automated']
+              });
+            }
+
+      - name: Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1
+        continue-on-error: true
+        with:
+          payload: |
+            {
+              "text": "🚨 ${critical} critical unread bottle(s) in ${{ github.repository }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *${{ needs.scan-bottles.outputs.critical_bottles }} Critical Unread Bottle(s)*\n*Repo:* `${{ github.repository }}`\nPlease review and respond to urgent fleet messages."
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

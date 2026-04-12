@@ -1,0 +1,250 @@
+# ============================================================================
+# Fleet CI — Rust Workflow
+# ============================================================================
+# Reusable workflow for Rust-based vessels (flux-rs, flux-rust, etc.).
+# Provides cargo fmt, clippy, test, and release build with caching.
+#
+# To use as a reusable workflow:
+#   uses: superinstance/fleet-ci/.github/workflows/fleet-ci-rust.yml@main
+#   with:
+#     rust_version: '["stable", "beta"]'
+#     features: '["full","serde"]'
+# ============================================================================
+
+name: Fleet CI — Rust
+
+on:
+  push:
+    branches: [main, develop, "fleet/*"]
+    paths:
+      - "**.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - ".fleet-ci-config.json"
+      - ".github/workflows/fleet-ci-rust.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "**.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_call:
+    inputs:
+      rust_version:
+        description: "Rust versions to test (JSON array)"
+        required: false
+        type: string
+        default: '["stable", "nightly"]'
+      features:
+        description: "Cargo features to test (JSON array)"
+        required: false
+        type: string
+        default: '[""]'
+      clippy_flags:
+        description: "Additional clippy flags"
+        required: false
+        type: string
+        default: "-D warnings -W clippy::all"
+      run_release_build:
+        description: "Build release artifacts"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings"
+
+concurrency:
+  group: fleet-ci-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Lint: cargo fmt
+  # --------------------------------------------------------------------------
+  fmt:
+    name: 🎨 Format Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # --------------------------------------------------------------------------
+  # Lint: cargo clippy
+  # --------------------------------------------------------------------------
+  clippy:
+    name: 🔍 Clippy
+    needs: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        rust-version: ["stable"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+          components: clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-clippy-${{ runner.os }}-
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- ${{ inputs.clippy_flags || '-D warnings -W clippy::all' }}
+
+      - name: Run clippy (no default features)
+        run: cargo clippy --all-targets --no-default-features -- ${{ inputs.clippy_flags || '-D warnings' }}
+        continue-on-error: true
+
+  # --------------------------------------------------------------------------
+  # Test Matrix
+  # --------------------------------------------------------------------------
+  test:
+    name: 🧪 Test (${{ matrix.rust-version }} ${{ matrix.features }})
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        rust-version: ["stable", "nightly"]
+        features: ["", "--all-features"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: cargo-test-${{ runner.os }}-${{ matrix.rust-version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-test-${{ runner.os }}-${{ matrix.rust-version }}-
+
+      - name: Install dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config build-essential
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build ${{ matrix.features }}
+
+      - name: Run tests
+        run: cargo test ${{ matrix.features }} -- --nocapture --test-threads=1
+        env:
+          FLEET_ISA_VERSION: "2.0"
+          FLEET_TEST_MODE: "ci"
+
+      - name: Run doc tests
+        run: cargo test ${{ matrix.features }} --doc
+
+  # --------------------------------------------------------------------------
+  # Security Audit
+  # --------------------------------------------------------------------------
+  audit:
+    name: 🔒 Cargo Audit
+    needs: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
+
+      - name: Check for duplicate dependencies
+        run: |
+          cargo install cargo-deny
+          cargo deny check duplicates
+        continue-on-error: true
+
+  # --------------------------------------------------------------------------
+  # Release Build
+  # --------------------------------------------------------------------------
+  build-release:
+    name: 📦 Release Build
+    needs: [test, audit]
+    if: ${{ inputs.run_release_build != false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-release-${{ runner.os }}-
+
+      - name: Build release
+        run: cargo build --release --all-features
+
+      - name: Check binary size
+        run: |
+          echo "## 📦 Binary Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------|" >> $GITHUB_STEP_SUMMARY
+          find target/release -maxdepth 1 -type f -executable | while read bin; do
+            size=$(du -h "$bin" | cut -f1)
+            name=$(basename "$bin")
+            echo "| $name | $size |" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-release
+          path: target/release/*
+          retention-days: 7
+          if-no-files-found: ignore

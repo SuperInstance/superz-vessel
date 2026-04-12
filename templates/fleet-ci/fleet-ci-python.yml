@@ -1,0 +1,271 @@
+# ============================================================================
+# Fleet CI — Python Workflow
+# ============================================================================
+# Reusable workflow for Python-based vessels (flux-runtime, flux-conformance,
+# flux-a2a-signal, etc.). Provides ruff linting, pytest with coverage, and
+# optional mypy type checking across a Python version matrix.
+#
+# To use directly (standalone):
+#   Copy to .github/workflows/fleet-ci-python.yml and push.
+#
+# To use as a reusable workflow:
+#   uses: superinstance/fleet-ci/.github/workflows/fleet-ci-python.yml@main
+#   with:
+#     python_version: '["3.10", "3.11", "3.12"]'
+#     lint_command: "ruff check ."
+#     test_command: "pytest"
+# ============================================================================
+
+name: Fleet CI — Python
+
+on:
+  push:
+    branches: [main, develop, "fleet/*"]
+    paths:
+      - "**.py"
+      - "pyproject.toml"
+      - "setup.py"
+      - "setup.cfg"
+      - "requirements*.txt"
+      - "Pipfile"
+      - "poetry.lock"
+      - ".fleet-ci-config.json"
+      - ".github/workflows/fleet-ci-python.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "**.py"
+      - "pyproject.toml"
+      - "setup.py"
+      - "setup.cfg"
+      - "requirements*.txt"
+  workflow_call:
+    inputs:
+      python_version:
+        description: "Python versions to test (JSON array)"
+        required: false
+        type: string
+        default: '["3.10", "3.11", "3.12"]'
+      lint_command:
+        description: "Lint command override"
+        required: false
+        type: string
+        default: "ruff check ."
+      test_command:
+        description: "Test command override"
+        required: false
+        type: string
+        default: "pytest -x -q"
+      coverage_threshold:
+        description: "Minimum coverage percentage"
+        required: false
+        type: number
+        default: 80
+      run_mypy:
+        description: "Run mypy type checking"
+        required: false
+        type: boolean
+        default: false
+      mypy_targets:
+        description: "Space-separated mypy target directories"
+        required: false
+        type: string
+        default: "src tests"
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+concurrency:
+  group: fleet-ci-python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Lint
+  # --------------------------------------------------------------------------
+  lint:
+    name: 🔍 Lint (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        component:
+          - name: ruff-check
+            command: "ruff check . --output-format=github"
+          - name: ruff-format
+            command: "ruff format . --check"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Cache ruff cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'ruff.toml', '.ruff.toml') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-
+
+      - name: Run ${{ matrix.component.name }}
+        run: ${{ matrix.component.command }}
+
+  # --------------------------------------------------------------------------
+  # Type Check (mypy)
+  # --------------------------------------------------------------------------
+  typecheck:
+    name: 🔎 Type Check (mypy)
+    needs: lint
+    if: ${{ inputs.run_mypy || contains(fromJSON('["true", "True"]'), 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mypy
+          if [ -f pyproject.toml ]; then
+            pip install ".[dev]" 2>/dev/null || pip install -e ".[dev]" 2>/dev/null || true
+          elif [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+
+      - name: Run mypy
+        run: mypy ${{ inputs.mypy_targets || 'src tests' }} --ignore-missing-imports
+        continue-on-error: true
+
+  # --------------------------------------------------------------------------
+  # Test Matrix
+  # --------------------------------------------------------------------------
+  test:
+    name: 🧪 Test (Python ${{ matrix.python-version }})
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            setup.py
+            setup.cfg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Try modern dependency managers first
+          if [ -f pyproject.toml ] && command -v pdm &> /dev/null; then
+            pdm install --dev
+          elif [ -f pyproject.toml ] && grep -q "\[tool.poetry\]" pyproject.toml; then
+            pip install poetry && poetry install --with dev
+          elif [ -f pyproject.toml ]; then
+            pip install -e ".[dev,test]" 2>/dev/null || pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          elif [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run tests with coverage
+        run: |
+          pip install pytest pytest-cov pytest-timeout
+          TEST_CMD="${{ inputs.test_command || 'pytest -x -q' }}"
+          if echo "$TEST_CMD" | grep -qv "cov"; then
+            pytest --cov --cov-report=xml --cov-report=term-missing \
+                   --cov-fail-under=${{ inputs.coverage_threshold || 80 }} \
+                   -x -q
+          else
+            eval "$TEST_CMD"
+          fi
+        env:
+          FLEET_ISA_VERSION: "2.0"
+          FLEET_TEST_MODE: "ci"
+
+      - name: Generate coverage report
+        if: matrix.python-version == '3.12'
+        run: |
+          pip install coverage
+          coverage xml -o coverage.xml
+          coverage html -d coverage-report
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          flags: python-${{ matrix.python-version }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-test-results-${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            coverage-report/
+            .pytest_cache/
+          retention-days: 14
+
+  # --------------------------------------------------------------------------
+  # Build Check
+  # --------------------------------------------------------------------------
+  build:
+    name: 📦 Build Check
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package
+        run: twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-build
+          path: dist/
+          retention-days: 7

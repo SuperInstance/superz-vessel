@@ -1,0 +1,122 @@
+name: "Audit"
+description: "Run security audit based on project language"
+
+inputs:
+  language:
+    description: "Project language (python, rust, typescript)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Security Audit — Python
+      if: inputs.language == 'python'
+      shell: bash
+      run: |
+        pip install pip-audit safety 2>/dev/null || true
+
+        mkdir -p audit-report
+
+        echo "🔒 Running pip-audit..." | tee audit-report/audit.txt
+        if command -v pip-audit &> /dev/null; then
+          pip-audit --desc --progress-spinner off 2>&1 | tee -a audit-report/audit.txt || true
+        fi
+
+        echo "" >> audit-report/audit.txt
+        echo "🔒 Running safety check..." | tee -a audit-report/audit.txt
+        if command -v safety &> /dev/null; then
+          safety check --json > audit-report/safety.json 2>&1 || true
+        fi
+
+        # Check for known vulnerabilities
+        python3 << 'PYEOF'
+        import json, os
+
+        audit_file = "audit-report/safety.json"
+        vulnerabilities = 0
+        critical = 0
+
+        if os.path.exists(audit_file):
+            try:
+                with open(audit_file) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    vulnerabilities = len(data)
+                    for v in data:
+                        severity = v.get("severity", "").lower()
+                        if severity in ("critical", "high"):
+                            critical += 1
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        report = {
+            "vulnerabilities": vulnerabilities,
+            "critical": critical,
+            "status": "pass" if critical == 0 else "fail"
+        }
+
+        with open("audit-report/summary.json", "w") as f:
+            json.dump(report, f, indent=2)
+
+        print(f"📊 Found {vulnerabilities} vulnerability(ies), {critical} critical")
+        PYEOF
+
+    - name: Security Audit — Rust
+      if: inputs.language == 'rust'
+      shell: bash
+      run: |
+        mkdir -p audit-report
+
+        echo "🔒 Running cargo audit..."
+        if ! command -v cargo-audit &> /dev/null; then
+          cargo install cargo-audit
+        fi
+
+        cargo audit 2>&1 | tee audit-report/audit.txt || true
+
+        cargo audit --json > audit-report/audit.json 2>&1 || true
+
+    - name: Security Audit — TypeScript
+      if: inputs.language == 'typescript'
+      shell: bash
+      run: |
+        mkdir -p audit-report
+
+        echo "🔒 Running npm audit..."
+        npm audit --json > audit-report/npm-audit.json 2>&1 || true
+        npm audit 2>&1 | tee audit-report/audit.txt || true
+
+        echo "" >> audit-report/audit.txt
+        echo "🔒 Checking for outdated packages..."
+        npm outdated --json > audit-report/outdated.json 2>&1 || true
+
+        # Generate summary
+        python3 << 'PYEOF'
+        import json, os
+
+        audit_file = "audit-report/npm-audit.json"
+        vulnerabilities = 0
+        critical = 0
+
+        if os.path.exists(audit_file):
+            try:
+                with open(audit_file) as f:
+                    data = json.load(f)
+                metadata = data.get("metadata", {})
+                vulnerabilities = metadata.get("vulnerabilities", {}).get("info", 0)
+                critical = metadata.get("vulnerabilities", {}).get("critical", 0) + \
+                           metadata.get("vulnerabilities", {}).get("high", 0)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        report = {
+            "vulnerabilities": vulnerabilities,
+            "critical": critical,
+            "status": "pass" if critical == 0 else "fail"
+        }
+
+        with open("audit-report/summary.json", "w") as f:
+            json.dump(report, f, indent=2)
+
+        print(f"📊 Found {vulnerabilities} vulnerability(ies), {critical} critical/high")
+        PYEOF

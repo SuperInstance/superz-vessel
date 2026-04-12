@@ -1,0 +1,395 @@
+# ============================================================================
+# Fleet Manifest Validator
+# ============================================================================
+# Validates fleet-wide configuration and vessel health. Runs weekly or on
+# demand. Checks fleet.json schema, vessel repo accessibility, I2I peer links,
+# and generates a fleet health report.
+#
+# Required Secrets:
+#   FLEET_TOKEN — PAT with read access to all fleet org repos
+#
+# Schedule: Runs every Monday at 06:00 UTC
+# ============================================================================
+
+name: Fleet Manifest Validator
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      create_issue:
+        description: "Create GitHub issue if health drops below threshold"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      health_threshold:
+        description: "Health score threshold (0-100)"
+        required: false
+        default: "80"
+        type: string
+  push:
+    paths:
+      - "fleet.json"
+      - ".fleet-ci-config.json"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  FLEET_HEALTH_THRESHOLD: 80
+  FLEET_ORG: "superinstance"
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Validate fleet.json Schema
+  # --------------------------------------------------------------------------
+  validate-schema:
+    name: 📋 Validate fleet.json Schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check fleet.json exists
+        id: check-file
+        run: |
+          if [ ! -f "fleet.json" ]; then
+            echo "❌ fleet.json not found"
+            echo "exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "exists=true" >> $GITHUB_OUTPUT
+
+      - name: Validate JSON syntax
+        if: steps.check-file.outputs.exists == 'true'
+        run: |
+          python3 -c "
+          import json, sys
+
+          SCHEMA = {
+              'type': 'object',
+              'required': ['vessel_id', 'vessel_name', 'fleet_version'],
+              'properties': {
+                  'vessel_id': {'type': 'string', 'pattern': '^vessel-[a-z0-9-]+$'},
+                  'vessel_name': {'type': 'string', 'minLength': 1},
+                  'fleet_version': {'type': 'string'},
+                  'description': {'type': 'string'},
+                  'language': {'type': 'string', 'enum': ['python', 'rust', 'typescript', 'go', 'mixed']},
+                  'isa_version': {'type': 'string'},
+                  'dependencies': {
+                      'type': 'array',
+                      'items': {
+                          'type': 'object',
+                          'required': ['vessel_id'],
+                          'properties': {
+                              'vessel_id': {'type': 'string'},
+                              'interface': {'type': 'string'},
+                              'version': {'type': 'string'}
+                          }
+                      }
+                  },
+                  'i2i_peers': {
+                      'type': 'array',
+                      'items': {
+                          'type': 'object',
+                          'required': ['peer_id', 'protocol'],
+                          'properties': {
+                              'peer_id': {'type': 'string'},
+                              'protocol': {'type': 'string'},
+                              'endpoint': {'type': 'string'}
+                          }
+                      }
+                  },
+                  'endpoints': {
+                      'type': 'array',
+                      'items': {
+                          'type': 'object',
+                          'properties': {
+                              'name': {'type': 'string'},
+                              'path': {'type': 'string'},
+                              'method': {'type': 'string'}
+                          }
+                      }
+                  },
+                  'metadata': {'type': 'object'}
+              }
+          }
+
+          def validate(data, schema, path=''):
+              if schema.get('type') == 'object':
+                  if not isinstance(data, dict):
+                      raise ValueError(f'{path}: expected object, got {type(data).__name__}')
+                  for req in schema.get('required', []):
+                      if req not in data:
+                          raise ValueError(f'{path}: missing required field \"{req}\"')
+                  for key, prop_schema in schema.get('properties', {}).items():
+                      if key in data:
+                          validate(data[key], prop_schema, f'{path}.{key}')
+              elif schema.get('type') == 'array':
+                  if not isinstance(data, list):
+                      raise ValueError(f'{path}: expected array, got {type(data).__name__}')
+                  if 'items' in schema:
+                      for i, item in enumerate(data):
+                          validate(item, schema['items'], f'{path}[{i}]')
+              elif schema.get('type') == 'string':
+                  if not isinstance(data, str):
+                      raise ValueError(f'{path}: expected string, got {type(data).__name__}')
+                  if 'enum' in schema and data not in schema['enum']:
+                      raise ValueError(f'{path}: \"{data}\" not in {schema[\"enum\"]}')
+
+          with open('fleet.json') as f:
+              data = json.load(f)
+          validate(data, SCHEMA)
+          print(f'✅ fleet.json schema valid for vessel: {data[\"vessel_name\"]}')
+          print(f'   ID: {data[\"vessel_id\"]}')
+          print(f'   Fleet version: {data[\"fleet_version\"]}')
+          print(f'   Language: {data.get(\"language\", \"not specified\")}')
+          "
+
+      - name: Validate fleet_version format
+        if: steps.check-file.outputs.exists == 'true'
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('fleet.json')).get('fleet_version', ''))")
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9.]+)?$'; then
+            echo "::warning::fleet_version '$VERSION' does not match semver pattern"
+          else
+            echo "✅ fleet_version format valid: $VERSION"
+          fi
+
+  # --------------------------------------------------------------------------
+  # Check Vessel Repo Accessibility
+  # --------------------------------------------------------------------------
+  check-repos:
+    name: 🔗 Check Vessel Repos
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: validate-schema
+    if: always() && needs.validate-schema.result == 'success'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check dependency vessel repos
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔍 Checking vessel dependencies..."
+
+          python3 << 'SCRIPT'
+          import json, subprocess, sys
+
+          with open('fleet.json') as f:
+              data = json.load(f)
+
+          deps = data.get('dependencies', [])
+          peers = data.get('i2i_peers', [])
+
+          all_vessels = set()
+          for dep in deps:
+              all_vessels.add(dep.get('vessel_id', ''))
+          for peer in peers:
+              all_vessels.add(peer.get('peer_id', ''))
+
+          failed = []
+          for vessel_id in sorted(all_vessels):
+              if not vessel_id:
+                  continue
+              repo = f"${{ env.FLEET_ORG }}/{vessel_id}"
+              print(f"  Checking {repo}...", end=" ")
+              result = subprocess.run(
+                  ['gh', 'repo', 'view', repo, '--json', 'url', '-q', '.url'],
+                  capture_output=True, text=True
+              )
+              if result.returncode == 0:
+                  print("✅")
+              else:
+                  print(f"❌ ({result.stderr.strip()})")
+                  failed.append(vessel_id)
+
+          if failed:
+              print(f"\n❌ {len(failed)} vessel(s) not accessible: {', '.join(failed)}")
+              with open('validation-errors.txt', 'w') as f:
+                  for v in failed:
+                      f.write(f"inaccessible_vessel: {v}\n")
+              sys.exit(1)
+          else:
+              print(f"\n✅ All {len(all_vessels)} vessel repos accessible")
+          SCRIPT
+
+      - name: Upload validation errors
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-errors
+          path: validation-errors.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Verify I2I Peer Links
+  # --------------------------------------------------------------------------
+  verify-peers:
+    name: 🔗 Verify I2I Peer Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: validate-schema
+    if: always() && needs.validate-schema.result == 'success'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate I2I peer configuration
+        run: |
+          python3 << 'SCRIPT'
+          import json, sys
+
+          with open('fleet.json') as f:
+              data = json.load(f)
+
+          peers = data.get('i2i_peers', [])
+          if not peers:
+              print("ℹ️  No I2I peers configured")
+              sys.exit(0)
+
+          print(f"🔍 Validating {len(peers)} I2I peer link(s)...")
+
+          errors = []
+          for i, peer in enumerate(peers):
+              peer_id = peer.get('peer_id', '')
+              protocol = peer.get('protocol', '')
+
+              if not peer_id:
+                  errors.append(f"Peer[{i}]: missing peer_id")
+                  continue
+
+              if not protocol:
+                  errors.append(f"Peer[{i}]: missing protocol")
+                  continue
+
+              valid_protocols = ['grpc', 'http', 'websocket', 'nats', 'redis']
+              if protocol not in valid_protocols:
+                  errors.append(f"Peer[{i}]: unknown protocol '{protocol}' (valid: {valid_protocols})")
+
+              endpoint = peer.get('endpoint', '')
+              if endpoint and not endpoint.startswith(('http://', 'https://', 'grpc://', 'nats://', 'ws://', 'wss://')):
+                  errors.append(f"Peer[{i}]: invalid endpoint format '{endpoint}'")
+
+              print(f"  ✅ {peer_id} ({protocol})")
+
+          if errors:
+              print(f"\n❌ {len(errors)} peer link error(s):")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          else:
+              print(f"\n✅ All {len(peers)} I2I peer links valid")
+          SCRIPT
+
+  # --------------------------------------------------------------------------
+  # Generate Fleet Health Report
+  # --------------------------------------------------------------------------
+  health-report:
+    name: 🏥 Fleet Health Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [validate-schema, check-repos, verify-peers]
+    if: always()
+    steps:
+      - name: Calculate health score
+        id: health
+        run: |
+          SCORE=100
+
+          # Deduct for schema validation failures
+          if [ "${{ needs.validate-schema.result }}" != "success" ]; then
+            SCORE=$((SCORE - 30))
+            echo "⚠️  -30 Schema validation failed"
+          fi
+
+          # Deduct for repo accessibility failures
+          if [ "${{ needs.check-repos.result }}" != "success" ]; then
+            SCORE=$((SCORE - 25))
+            echo "⚠️  -25 Repo accessibility failed"
+          fi
+
+          # Deduct for peer link failures
+          if [ "${{ needs.verify-peers.result }}" != "success" ]; then
+            SCORE=$((SCORE - 15))
+            echo "⚠️  -15 I2I peer verification failed"
+          fi
+
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo ""
+          echo "🏥 Fleet Health Score: ${SCORE}/100"
+
+      - name: Generate report
+        run: |
+          SCORE=${{ steps.health.outputs.score }}
+          THRESHOLD=${{ github.event.inputs.health_threshold || env.FLEET_HEALTH_THRESHOLD }}
+
+          echo "## 🏥 Fleet Health Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📋 Schema Validation | ${{ needs.validate-schema.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔗 Repo Accessibility | ${{ needs.check-repos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔗 I2I Peer Links | ${{ needs.verify-peers.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Health Score: ${SCORE}/100" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$SCORE" -ge "$THRESHOLD" ]; then
+            echo "### ✅ Fleet is healthy (≥ ${THRESHOLD})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Fleet health below threshold (${THRESHOLD})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Create issue if health is low
+        if: steps.health.outputs.score < (github.event.inputs.health_threshold || env.FLEET_HEALTH_THRESHOLD) && (github.event.inputs.create_issue || 'true') == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score = ${{ steps.health.outputs.score }};
+            const threshold = ${{ github.event.inputs.health_threshold || 80 }};
+
+            const title = `🏥 Fleet Health Alert: Score ${score}/100 (threshold: ${threshold})`;
+            const body = `## Fleet Health Report\n\n` +
+              `**Score:** ${score}/100\n` +
+              `**Threshold:** ${threshold}\n` +
+              `**Repository:** \`${context.repo.owner}/${context.repo.repo}\`\n\n` +
+              `| Check | Status |\n|-------|--------|\n` +
+              `| Schema Validation | ${{ needs.validate-schema.result }} |\n` +
+              `| Repo Accessibility | ${{ needs.check-repos.result }} |\n` +
+              `| I2I Peer Links | ${{ needs.verify-peers.result }} |\n\n` +
+              `---\n_Auto-generated by [Fleet Manifest Validator](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_`;
+
+            // Check for existing open issue
+            const issues = await github.rest.issues.listForRepo({
+              ...context.repo,
+              labels: 'fleet-health',
+              state: 'open',
+              per_page: 5
+            });
+
+            const existing = issues.data.find(i => i.title.includes('Fleet Health Alert'));
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: `### Update: Score is now ${score}/100\n\n` +
+                  `Run: [${context.runId}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.runId }})`
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: title,
+                body: body,
+                labels: ['fleet-health', 'automated']
+              });
+            }

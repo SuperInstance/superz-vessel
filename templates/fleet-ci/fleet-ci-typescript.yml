@@ -1,0 +1,319 @@
+# ============================================================================
+# Fleet CI — TypeScript Workflow
+# ============================================================================
+# Reusable workflow for TypeScript-based vessels (flux-lsp, flux-ide, etc.).
+# Provides eslint, TypeScript compiler checks, vitest/jest testing, and build
+# verification with npm/pnpm caching.
+#
+# To use as a reusable workflow:
+#   uses: superinstance/fleet-ci/.github/workflows/fleet-ci-typescript.yml@main
+#   with:
+#     node_version: '["18", "20"]'
+#     package_manager: "pnpm"
+# ============================================================================
+
+name: Fleet CI — TypeScript
+
+on:
+  push:
+    branches: [main, develop, "fleet/*"]
+    paths:
+      - "**.ts"
+      - "**.tsx"
+      - "**.js"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "yarn.lock"
+      - "package-lock.json"
+      - "tsconfig*.json"
+      - ".eslintrc*"
+      - "eslint.config.*"
+      - ".fleet-ci-config.json"
+      - ".github/workflows/fleet-ci-typescript.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "**.ts"
+      - "**.tsx"
+      - "**.js"
+      - "package.json"
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js versions to test (JSON array)"
+        required: false
+        type: string
+        default: '["18", "20"]'
+      package_manager:
+        description: "Package manager to use"
+        required: false
+        type: string
+        default: "npm"
+      test_framework:
+        description: "Test framework (vitest or jest)"
+        required: false
+        type: string
+        default: "vitest"
+      coverage_threshold:
+        description: "Minimum coverage percentage"
+        required: false
+        type: number
+        default: 80
+
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+concurrency:
+  group: fleet-ci-typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Detect package manager
+  # --------------------------------------------------------------------------
+  detect-pm:
+    name: 📋 Detect Setup
+    runs-on: ubuntu-latest
+    outputs:
+      package_manager: ${{ steps.pm.outputs.manager }}
+      has_lockfile: ${{ steps.pm.outputs.has_lockfile }}
+      build_script: ${{ steps.pm.outputs.build_script }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect package manager
+        id: pm
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            echo "manager=pnpm" >> $GITHUB_OUTPUT
+            echo "has_lockfile=true" >> $GITHUB_OUTPUT
+          elif [ -f "yarn.lock" ]; then
+            echo "manager=yarn" >> $GITHUB_OUTPUT
+            echo "has_lockfile=true" >> $GITHUB_OUTPUT
+          elif [ -f "package-lock.json" ]; then
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "has_lockfile=true" >> $GITHUB_OUTPUT
+          else
+            echo "manager=${{ inputs.package_manager || 'npm' }}" >> $GITHUB_OUTPUT
+            echo "has_lockfile=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check for build script
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)" 2>/dev/null; then
+            echo "build_script=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_script=false" >> $GITHUB_OUTPUT
+          fi
+
+  # --------------------------------------------------------------------------
+  # Lint
+  # --------------------------------------------------------------------------
+  lint:
+    name: 🔍 Lint
+    needs: detect-pm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: ${{ needs.detect-pm.outputs.package_manager }}
+
+      - name: Install pnpm
+        if: needs.detect-pm.outputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: |
+          case "${{ needs.detect-pm.outputs.package_manager }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Run ESLint
+        run: |
+          if [ -f "eslint.config.js" ] || [ -f "eslint.config.mjs" ] || [ -f "eslint.config.ts" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.js" ]; then
+            npx eslint . --max-warnings=0 --format github
+          else
+            echo "⚠️  No ESLint config found — skipping lint"
+          fi
+        continue-on-error: false
+
+      - name: Run Prettier check
+        run: |
+          if [ -f ".prettierrc" ] || [ -f ".prettierrc.json" ] || [ -f ".prettierrc.js" ] || npx prettier --check . > /dev/null 2>&1; then
+            npx prettier --check .
+          else
+            echo "⚠️  No Prettier config found — skipping format check"
+          fi
+        continue-on-error: true
+
+  # --------------------------------------------------------------------------
+  # Type Check
+  # --------------------------------------------------------------------------
+  typecheck:
+    name: 🔎 Type Check
+    needs: detect-pm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: ${{ needs.detect-pm.outputs.package_manager }}
+
+      - name: Install pnpm
+        if: needs.detect-pm.outputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: |
+          case "${{ needs.detect-pm.outputs.package_manager }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Run TypeScript compiler
+        run: npx tsc --noEmit --pretty
+        continue-on-error: false
+
+  # --------------------------------------------------------------------------
+  # Test Matrix
+  # --------------------------------------------------------------------------
+  test:
+    name: 🧪 Test (Node ${{ matrix.node-version }})
+    needs: [detect-pm, lint, typecheck]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: ${{ needs.detect-pm.outputs.package_manager }}
+
+      - name: Install pnpm
+        if: needs.detect-pm.outputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: |
+          case "${{ needs.detect-pm.outputs.package_manager }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Run tests with coverage
+        run: |
+          FRAMEWORK="${{ inputs.test_framework || 'vitest' }}"
+          if [ "$FRAMEWORK" = "jest" ]; then
+            if npx jest --version > /dev/null 2>&1; then
+              npx jest --coverage --coverageThreshold='{"global":{"branches":${{ inputs.coverage_threshold || 80 }},"functions":${{ inputs.coverage_threshold || 80 }},"lines":${{ inputs.coverage_threshold || 80 }}}'
+            else
+              echo "⚠️  Jest not found — running npm test"
+              npm test
+            fi
+          else
+            if npx vitest --version > /dev/null 2>&1; then
+              npx vitest run --coverage --coverage.thresholds.lines=${{ inputs.coverage_threshold || 80 }}
+            else
+              echo "⚠️  Vitest not found — running npm test"
+              npm test
+            fi
+          fi
+        env:
+          FLEET_ISA_VERSION: "2.0"
+          FLEET_TEST_MODE: "ci"
+          NODE_ENV: "test"
+
+      - name: Upload coverage to Codecov
+        if: matrix.node-version == '20'
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/coverage-final.json
+          fail_ci_if_error: false
+          flags: typescript-node-${{ matrix.node-version }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ts-test-results-node-${{ matrix.node-version }}
+          path: coverage/
+          retention-days: 14
+
+  # --------------------------------------------------------------------------
+  # Build
+  # --------------------------------------------------------------------------
+  build:
+    name: 📦 Build
+    needs: [detect-pm, test]
+    if: needs.detect-pm.outputs.build_script == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: ${{ needs.detect-pm.outputs.package_manager }}
+
+      - name: Install pnpm
+        if: needs.detect-pm.outputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: |
+          case "${{ needs.detect-pm.outputs.package_manager }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+          esac
+
+      - name: Run build
+        run: |
+          case "${{ needs.detect-pm.outputs.package_manager }}" in
+            pnpm) pnpm build ;;
+            yarn) yarn build ;;
+            npm)  npm run build ;;
+          esac
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-build
+          path: dist/
+          retention-days: 7
+          if-no-files-found: ignore

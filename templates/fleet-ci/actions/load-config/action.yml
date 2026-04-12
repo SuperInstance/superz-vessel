@@ -1,0 +1,144 @@
+# ============================================================================
+# Composite Action: Load Fleet CI Config
+# ============================================================================
+# Reads .fleet-ci-config.json and outputs configuration values for use in
+# downstream CI jobs. Falls back to sensible defaults when fields are missing.
+# ============================================================================
+
+name: "Load Fleet CI Config"
+description: "Load and validate .fleet-ci-config.json configuration"
+
+inputs:
+  config_path:
+    description: "Path to config file"
+    required: false
+    default: ".fleet-ci-config.json"
+  defaults:
+    description: "JSON string of default values"
+    required: false
+    default: "{}"
+
+outputs:
+  language:
+    description: "Primary language of the project"
+    value: ${{ steps.load.outputs.language }}
+  test_command:
+    description: "Command to run tests"
+    value: ${{ steps.load.outputs.test_command }}
+  lint_command:
+    description: "Command to run linter"
+    value: ${{ steps.load.outputs.lint_command }}
+  coverage_threshold:
+    description: "Minimum coverage percentage"
+    value: ${{ steps.load.outputs.coverage_threshold }}
+  conformance_tests:
+    description: "Whether conformance tests are configured"
+    value: ${{ steps.load.outputs.conformance_tests }}
+  isa_version:
+    description: "FLUX ISA version"
+    value: ${{ steps.load.outputs.isa_version }}
+  block_merge:
+    description: "Whether to block merge on failure"
+    value: ${{ steps.load.outputs.block_merge }}
+  require_tests:
+    description: "Whether tests are required"
+    value: ${{ steps.load.outputs.require_tests }}
+  require_docs:
+    description: "Whether documentation is required"
+    value: ${{ steps.load.outputs.require_docs }}
+  python_versions:
+    description: "Python versions matrix (JSON)"
+    value: ${{ steps.load.outputs.python_versions }}
+  node_versions:
+    description: "Node.js versions matrix (JSON)"
+    value: ${{ steps.load.outputs.node_versions }}
+  rust_target:
+    description: "Rust build target"
+    value: ${{ steps.load.outputs.rust_target }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Load configuration
+      id: load
+      shell: bash
+      run: |
+        CONFIG_PATH="${{ inputs.config_path }}"
+        DEFAULTS="${{ inputs.defaults }}"
+
+        echo "📋 Loading fleet CI config from: $CONFIG_PATH"
+
+        if [ -f "$CONFIG_PATH" ]; then
+          echo "✅ Config file found"
+        else
+          echo "⚠️  Config file not found — using defaults"
+          echo "$DEFAULTS" > /tmp/fleet-ci-defaults.json
+          CONFIG_PATH="/tmp/fleet-ci-defaults.json"
+        fi
+
+        python3 << 'PYEOF'
+        import json, os
+
+        config_path = os.environ["CONFIG_PATH"]
+        defaults_raw = os.environ.get("DEFAULTS", "{}")
+
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            print(f"❌ Failed to load config: {e}")
+            config = {}
+
+        try:
+            defaults = json.loads(defaults_raw) if defaults_raw else {}
+        except json.JSONDecodeError:
+            defaults = {}
+
+        language = config.get("language", defaults.get("language", "python"))
+        test_command = config.get("test_command", defaults.get("test_command", "pytest"))
+        lint_command = config.get("lint_command", defaults.get("lint_command", ""))
+        coverage_threshold = config.get("coverage_threshold", defaults.get("coverage_threshold", 80))
+        conformance_tests = str(config.get("conformance_tests", defaults.get("conformance_tests", False)))
+        isa_version = config.get("isa_version", defaults.get("isa_version", "2.0"))
+
+        quality_gates = config.get("quality_gates", defaults.get("quality_gates", {}))
+        block_merge = str(quality_gates.get("block_merge_on_failure", True))
+        require_tests = str(quality_gates.get("require_tests", True))
+        require_docs = str(quality_gates.get("require_docs", False))
+
+        py_config = config.get("python", {})
+        py_versions = py_config.get("versions", defaults.get("python_versions", ["3.10", "3.11", "3.12"]))
+        python_versions = json.dumps(py_versions)
+
+        ts_config = config.get("typescript", {})
+        node_versions = json.dumps(ts_config.get("versions", defaults.get("node_versions", ["18", "20"])))
+
+        rust_config = config.get("rust", {})
+        rust_target = rust_config.get("target", defaults.get("rust_target", "x86_64-unknown-linux-gnu"))
+
+        gh_out = os.environ.get("GITHUB_OUTPUT", "")
+        outputs = {
+            "language": language,
+            "test_command": test_command,
+            "lint_command": lint_command,
+            "coverage_threshold": str(coverage_threshold),
+            "conformance_tests": conformance_tests.lower(),
+            "isa_version": isa_version,
+            "block_merge": block_merge.lower(),
+            "require_tests": require_tests.lower(),
+            "require_docs": require_docs.lower(),
+            "python_versions": python_versions,
+            "node_versions": node_versions,
+            "rust_target": rust_target,
+        }
+
+        if gh_out:
+            with open(gh_out, "a") as f:
+                for k, v in outputs.items():
+                    f.write(f"{k}={v}\n")
+
+        print(f"✅ Config loaded: language={language}, coverage_threshold={coverage_threshold}")
+        PYEOF
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+          DEFAULTS: ${{ inputs.defaults }}

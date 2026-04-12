@@ -1,0 +1,69 @@
+name: "Test"
+description: "Run test suite with coverage for the detected language"
+
+inputs:
+  language:
+    description: "Project language (python, rust, typescript)"
+    required: true
+  test_command:
+    description: "Custom test command override"
+    required: false
+    default: ""
+  version:
+    description: "Language version string"
+    required: false
+    default: ""
+  coverage_threshold:
+    description: "Minimum coverage percentage"
+    required: false
+    default: "80"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run custom test command
+      if: inputs.test_command != ''
+      shell: bash
+      run: ${{ inputs.test_command }}
+      env:
+        FLEET_ISA_VERSION: "2.0"
+        FLEET_TEST_MODE: "ci"
+
+    - name: Test — Python (pytest)
+      if: inputs.language == 'python' && inputs.test_command == ''
+      shell: bash
+      run: |
+        pip install pytest pytest-cov pytest-timeout
+        pytest -x -q \
+          --cov --cov-report=xml --cov-report=term-missing \
+          --cov-fail-under=${{ inputs.coverage_threshold }} \
+          --junitxml=test-results/junit.xml
+        mkdir -p coverage-report
+      env:
+        FLEET_ISA_VERSION: "2.0"
+        FLEET_TEST_MODE: "ci"
+
+    - name: Test — Rust (cargo test)
+      if: inputs.language == 'rust' && inputs.test_command == ''
+      shell: bash
+      run: |
+        cargo test --all-features -- --nocapture
+        cargo test --doc
+      env:
+        FLEET_ISA_VERSION: "2.0"
+        FLEET_TEST_MODE: "ci"
+        RUST_BACKTRACE: 1
+
+    - name: Test — TypeScript (vitest/jest)
+      if: inputs.language == 'typescript' && inputs.test_command == ''
+      shell: bash
+      run: |
+        if npx vitest --version > /dev/null 2>&1; then
+          npx vitest run --coverage || npm test
+        else
+          npm test
+        fi
+      env:
+        FLEET_ISA_VERSION: "2.0"
+        FLEET_TEST_MODE: "ci"
+        NODE_ENV: "test"

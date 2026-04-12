@@ -1,0 +1,81 @@
+{
+  "$schema": "https://raw.githubusercontent.com/superinstance/fleet-ci/main/schemas/fleet-ci-config.schema.json",
+  "fleet_ci_version": "2.0",
+
+  "language": "python",
+
+  "test_command": "pytest -x -q",
+  "lint_command": "ruff check . --output-format=github",
+  "build_command": null,
+  "coverage_threshold": 80,
+
+  "conformance_tests": false,
+  "isa_version": "2.0",
+
+  "quality_gates": {
+    "block_merge_on_failure": true,
+    "require_tests": true,
+    "require_docs": false,
+    "require_conformance": false,
+    "require_security_audit": true,
+    "coverage_threshold": 80,
+    "max_warnings": 0
+  },
+
+  "python": {
+    "versions": ["3.10", "3.11", "3.12"],
+    "package_manager": "pip",
+    "extras": ["dev", "test"],
+    "run_mypy": false,
+    "mypy_targets": "src tests",
+    "mypy_strict": false,
+    "ruff_config": null,
+    "pytest_config": null,
+    "cache_key": "pyproject.toml"
+  },
+
+  "rust": {
+    "versions": ["stable", "nightly"],
+    "features": [],
+    "clippy_flags": "-D warnings -W clippy::all",
+    "run_audit": true,
+    "run_deny": true,
+    "release_build": true
+  },
+
+  "typescript": {
+    "versions": ["18", "20"],
+    "package_manager": "npm",
+    "test_framework": "vitest",
+    "coverage_threshold": 80,
+    "run_prettier": true,
+    "strict_types": true
+  },
+
+  "fleet": {
+    "validate_fleet_json": true,
+    "check_i2i_messages": true,
+    "verify_bottle_format": true,
+    "bottle_max_age_days": 7
+  },
+
+  "notifications": {
+    "slack_webhook_secret": "SLACK_WEBHOOK_URL",
+    "on_failure": true,
+    "on_success": false,
+    "on_conformance_failure": true
+  },
+
+  "artifacts": {
+    "retain_test_results_days": 14,
+    "retain_build_artifacts_days": 7,
+    "retain_audit_reports_days": 30,
+    "upload_coverage": true
+  },
+
+  "caching": {
+    "enabled": true,
+    "cache_deps": true,
+    "cache_build": true
+  }
+}

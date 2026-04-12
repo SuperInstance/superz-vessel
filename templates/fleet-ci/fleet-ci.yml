@@ -1,0 +1,363 @@
+# ============================================================================
+# Fleet CI — Main CI Workflow
+# ============================================================================
+# The primary CI pipeline for any vessel in the fleet. This workflow detects
+# the project language via .fleet-ci-config.json and dispatches to the
+# appropriate language-specific reusable workflow.
+#
+# Usage:
+#   1. Copy this file to .github/workflows/fleet-ci.yml
+#   2. Ensure .fleet-ci-config.json exists at your repo root
+#   3. Push — CI runs automatically on every push and pull request
+#
+# Secrets (set in GitHub repo Settings → Secrets and variables → Actions):
+#   FLEET_TOKEN          — PAT with read access to fleet repos
+#   CODECOV_TOKEN        — (optional) Codecov upload token
+#   SLACK_WEBHOOK_URL    — (optional) Slack notifications
+# ============================================================================
+
+name: Fleet CI
+
+on:
+  push:
+    branches: [main, develop, "fleet/*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      skip_quality_gates:
+        description: "Skip quality gate enforcement"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      conformance_only:
+        description: "Run only FLUX ISA conformance tests"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+env:
+  FLEET_CI_VERSION: "2.0"
+  CARGO_TERM_COLOR: always
+  PYTHONDONTWRITEBYTECODE: "1"
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+concurrency:
+  group: fleet-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Job 0: Load configuration
+  # --------------------------------------------------------------------------
+  load-config:
+    name: 📋 Load Config
+    runs-on: ubuntu-latest
+    outputs:
+      language: ${{ steps.config.outputs.language }}
+      test_command: ${{ steps.config.outputs.test_command }}
+      lint_command: ${{ steps.config.outputs.lint_command }}
+      coverage_threshold: ${{ steps.config.outputs.coverage_threshold }}
+      conformance_tests: ${{ steps.config.outputs.conformance_tests }}
+      isa_version: ${{ steps.config.outputs.isa_version }}
+      block_merge: ${{ steps.config.outputs.block_merge }}
+      require_tests: ${{ steps.config.outputs.require_tests }}
+      require_docs: ${{ steps.config.outputs.require_docs }}
+      python_versions: ${{ steps.config.outputs.python_versions }}
+      node_versions: ${{ steps.config.outputs.node_versions }}
+      rust_target: ${{ steps.config.outputs.rust_target }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load fleet CI config
+        id: config
+        uses: ./actions/load-config
+        with:
+          config_path: ".fleet-ci-config.json"
+          defaults: |
+            {
+              "language": "python",
+              "test_command": "pytest",
+              "lint_command": "",
+              "coverage_threshold": 80,
+              "conformance_tests": false,
+              "isa_version": "2.0",
+              "quality_gates": {
+                "block_merge_on_failure": true,
+                "require_tests": true,
+                "require_docs": false
+              },
+              "python_versions": ["3.10", "3.11", "3.12"],
+              "node_versions": ["18", "20"],
+              "rust_target": "x86_64-unknown-linux-gnu"
+            }
+
+  # --------------------------------------------------------------------------
+  # Job 1: Lint
+  # --------------------------------------------------------------------------
+  lint:
+    name: 🔍 Lint
+    needs: load-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect language and run linter
+        uses: ./actions/lint
+        with:
+          language: ${{ needs.load-config.outputs.language }}
+          lint_command: ${{ needs.load-config.outputs.lint_command }}
+
+  # --------------------------------------------------------------------------
+  # Job 2: Test
+  # --------------------------------------------------------------------------
+  test:
+    name: 🧪 Test
+    needs: [load-config, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.load-config.outputs.python_versions || '["3.12"]') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        uses: ./actions/test
+        with:
+          language: ${{ needs.load-config.outputs.language }}
+          test_command: ${{ needs.load-config.outputs.test_command }}
+          version: ${{ matrix.version }}
+          coverage_threshold: ${{ needs.load-config.outputs.coverage_threshold }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.version }}
+          path: |
+            test-results/
+            coverage-report/
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        if: matrix.version == '3.12' || matrix.version == '20'
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # --------------------------------------------------------------------------
+  # Job 3: FLUX ISA Conformance Tests
+  # --------------------------------------------------------------------------
+  conformance:
+    name: ⚡ FLUX Conformance
+    needs: [load-config, test]
+    if: needs.load-config.outputs.conformance_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run FLUX ISA conformance tests
+        uses: ./actions/conformance
+        with:
+          isa_version: ${{ needs.load-config.outputs.isa_version }}
+          fleet_token: ${{ secrets.FLEET_TOKEN }}
+        env:
+          FLEET_ISA_VERSION: ${{ needs.load-config.outputs.isa_version }}
+
+      - name: Upload conformance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance-results
+          path: conformance-results/
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Job 4: Security Audit
+  # --------------------------------------------------------------------------
+  audit:
+    name: 🔒 Security Audit
+    needs: load-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run security audit
+        uses: ./actions/audit
+        with:
+          language: ${{ needs.load-config.outputs.language }}
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-audit
+          path: audit-report/
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Job 5: Fleet Checks
+  # --------------------------------------------------------------------------
+  fleet-check:
+    name: 🚢 Fleet Check
+    needs: load-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate fleet.json
+        id: fleet-json
+        run: |
+          if [ -f "fleet.json" ]; then
+            echo "✅ fleet.json found — validating schema..."
+            python3 -c "
+          import json, sys
+          with open('fleet.json') as f:
+              data = json.load(f)
+          required = ['vessel_id', 'vessel_name', 'fleet_version']
+          for field in required:
+              if field not in data:
+                  print(f'❌ Missing required field: {field}')
+                  sys.exit(1)
+          print(f'✅ fleet.json valid for vessel: {data.get(\"vessel_name\", \"unknown\")}')
+          "
+          else
+            echo "⚠️  No fleet.json found — fleet checks skipped"
+            echo "has_fleet_json=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check I2I message format
+        run: |
+          if [ -f "fleet.json" ]; then
+            echo "🔍 Checking I2I message interfaces..."
+            # Validate I2I message schemas if present
+            if [ -d "messages" ]; then
+              echo "📂 Messages directory found — validating schemas..."
+              find messages/ -name "*.json" -exec python3 -c "
+          import json, sys
+          try:
+              json.load(open('{}'))
+              print('  ✅ {}')
+          except Exception as e:
+              print(f'  ❌ {}: {e}')
+              sys.exit(1)
+          " \;
+            fi
+          fi
+
+      - name: Verify bottle format
+        run: |
+          if [ -d "bottles" ]; then
+            echo "🍶 Checking bottle messages..."
+            for bottle in bottles/*.json; do
+              if [ -f "$bottle" ]; then
+                python3 -c "
+          import json, sys
+          with open('$bottle') as f:
+              data = json.load(f)
+          required = ['id', 'from_vessel', 'timestamp', 'payload', 'read']
+          for field in required:
+              if field not in data:
+                  print(f'❌ Bottle missing field: {field}')
+                  sys.exit(1)
+          print(f'  ✅ {data[\"id\"]}')
+          "
+              fi
+            done
+          fi
+
+  # --------------------------------------------------------------------------
+  # Job 6: Quality Gates (runs after all checks)
+  # --------------------------------------------------------------------------
+  quality-gates:
+    name: 🚦 Quality Gates
+    needs:
+      - load-config
+      - lint
+      - test
+      - conformance
+      - audit
+      - fleet-check
+    if: always() && github.event.inputs.skip_quality_gates != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Evaluate quality gates
+        uses: ./actions/quality-gates
+        with:
+          block_merge: ${{ needs.load-config.outputs.block_merge }}
+          require_tests: ${{ needs.load-config.outputs.require_tests }}
+          require_docs: ${{ needs.load-config.outputs.require_docs }}
+          coverage_threshold: ${{ needs.load-config.outputs.coverage_threshold }}
+          lint_result: ${{ needs.lint.result }}
+          test_result: ${{ needs.test.result }}
+          conformance_result: ${{ needs.conformance.result || 'skipped' }}
+          audit_result: ${{ needs.audit.result }}
+          fleet_check_result: ${{ needs.fleet-check.result }}
+
+      - name: Generate quality report
+        if: always()
+        run: |
+          echo "## 📊 Fleet CI Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔍 Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚡ Conformance | ${{ needs.conformance.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔒 Audit | ${{ needs.audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🚢 Fleet Check | ${{ needs.fleet-check.result }} |" >> $GITHUB_STEP_SUMMARY
+
+  # --------------------------------------------------------------------------
+  # Job 7: Notify
+  # --------------------------------------------------------------------------
+  notify:
+    name: 📢 Notify
+    needs: quality-gates
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "🚨 Fleet CI failed for ${{ github.repository }} on ${{ github.ref_name }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *Fleet CI Failed*\n*Repo:* `${{ github.repository }}`\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

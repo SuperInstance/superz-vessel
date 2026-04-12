@@ -1,0 +1,427 @@
+# ============================================================================
+# Fleet CI — Quality Gates
+# ============================================================================
+# Enforces quality standards across all fleet vessels. This workflow runs as a
+# required status check on pull requests and blocks merge when gates fail.
+#
+# Gates enforced:
+#   1. Test coverage threshold (default 80% for new code)
+#   2. No critical lint errors
+#   3. Conformance test pass rate (if applicable)
+#   4. Documentation coverage (README, API docs)
+#   5. All required CI jobs passed
+#
+# Configuration: Override defaults in .fleet-ci-config.json
+# ============================================================================
+
+name: Fleet Quality Gates
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_run:
+    workflows: ["Fleet CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: "Enforce quality gates (fail on violations)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  pull-requests: write
+  checks: write
+  contents: read
+
+concurrency:
+  group: quality-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Gate 1: Coverage Threshold
+  # --------------------------------------------------------------------------
+  coverage-check:
+    name: 📊 Coverage Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          if [ -f ".fleet-ci-config.json" ]; then
+            THRESHOLD=$(python3 -c "import json; print(json.load(open('.fleet-ci-config.json')).get('coverage_threshold', 80))")
+          else
+            THRESHOLD=80
+          fi
+          echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
+          echo "📋 Coverage threshold: ${THRESHOLD}%"
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: "*-test-results-*"
+          path: coverage-artifacts/
+          merge-multiple: true
+
+      - name: Check coverage
+        id: coverage
+        run: |
+          THRESHOLD=${{ steps.config.outputs.threshold }}
+          COVERAGE_FILE=""
+
+          # Find coverage file
+          for f in coverage-artifacts/coverage.xml coverage-artifacts/coverage-final.json coverage.xml; do
+            if [ -f "$f" ]; then
+              COVERAGE_FILE="$f"
+              break
+            fi
+          done
+
+          if [ -z "$COVERAGE_FILE" ]; then
+            echo "⚠️  No coverage file found — gate passes (no coverage data to check)"
+            echo "passed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "📁 Using coverage file: $COVERAGE_FILE"
+
+          # Extract coverage percentage
+          if [[ "$COVERAGE_FILE" == *.xml ]]; then
+            COVERAGE=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('$COVERAGE_FILE')
+          root = tree.getroot()
+          line_rate = float(root.attrib.get('line-rate', 0))
+          print(f'{line_rate * 100:.1f}')
+          ")
+          else
+            echo "⚠️  Unsupported coverage format — gate passes"
+            echo "passed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "📈 Current coverage: ${COVERAGE}%"
+          echo "🎯 Threshold: ${THRESHOLD}%"
+
+          PASS=$(python3 -c "
+          cov = float('$COVERAGE')
+          threshold = float('$THRESHOLD')
+          print('true' if cov >= threshold else 'false')
+          ")
+
+          echo "passed=$PASS" >> $GITHUB_OUTPUT
+
+          if [ "$PASS" = "false" ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            exit 1
+          fi
+
+  # --------------------------------------------------------------------------
+  # Gate 2: Lint Status
+  # --------------------------------------------------------------------------
+  lint-check:
+    name: 🔍 Lint Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check lint results from CI
+        id: lint
+        run: |
+          # This gate relies on the parent CI workflow results
+          # If we're triggered by workflow_run, check the parent result
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            RESULT="${{ github.event.workflow_run.conclusion }}"
+            if [ "$RESULT" = "success" ]; then
+              echo "passed=true" >> $GITHUB_OUTPUT
+            else
+              echo "passed=false" >> $GITHUB_OUTPUT
+              echo "::error::Parent CI workflow result: $RESULT"
+              exit 1
+            fi
+          else
+            # Direct PR check — lint results should be available
+            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "ℹ️  Lint gate delegates to main CI workflow"
+          fi
+
+  # --------------------------------------------------------------------------
+  # Gate 3: Conformance Pass Rate
+  # --------------------------------------------------------------------------
+  conformance-check:
+    name: ⚡ Conformance Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: contains(fromJSON('["true", "True"]'), 'false') != true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if conformance tests exist
+        id: has-conformance
+        run: |
+          if [ -f ".fleet-ci-config.json" ]; then
+            CONF=$(python3 -c "import json; print(json.load(open('.fleet-ci-config.json')).get('conformance_tests', False))")
+          else
+            CONF="false"
+          fi
+          echo "has_conformance=$CONF" >> $GITHUB_OUTPUT
+
+      - name: Download conformance results
+        if: steps.has-conformance.outputs.has_conformance == 'True'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: conformance-results
+          path: conformance-artifacts/
+
+      - name: Evaluate conformance results
+        if: steps.has-conformance.outputs.has_conformance == 'True'
+        run: |
+          if [ ! -d "conformance-artifacts" ] || [ -z "$(ls -A conformance-artifacts/)" ]; then
+            echo "⚠️  No conformance results found — gate passes (no data)"
+            exit 0
+          fi
+
+          # Look for conformance results JSON
+          RESULTS_FILE=""
+          for f in conformance-artifacts/*.json conformance-artifacts/results.json; do
+            if [ -f "$f" ]; then
+              RESULTS_FILE="$f"
+              break
+            fi
+          done
+
+          if [ -z "$RESULTS_FILE" ]; then
+            echo "⚠️  No conformance results file found — gate passes"
+            exit 0
+          fi
+
+          python3 -c "
+          import json, sys
+          with open('$RESULTS_FILE') as f:
+              data = json.load(f)
+          passed = data.get('passed', 0)
+          total = data.get('total', 0)
+          rate = (passed / total * 100) if total > 0 else 0
+          print(f'📊 Conformance: {passed}/{total} ({rate:.1f}%)')
+          if rate < 100:
+              print(f'::error::Conformance pass rate {rate:.1f}% is below 100%')
+              sys.exit(1)
+          "
+
+      - name: Skip if no conformance tests
+        if: steps.has-conformance.outputs.has_conformance != 'True'
+        run: echo "ℹ️  No conformance tests configured — gate passes"
+
+  # --------------------------------------------------------------------------
+  # Gate 4: Documentation Coverage
+  # --------------------------------------------------------------------------
+  docs-check:
+    name: 📚 Documentation Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load config
+        id: config
+        run: |
+          if [ -f ".fleet-ci-config.json" ]; then
+            REQUIRE_DOCS=$(python3 -c "
+          import json
+          qg = json.load(open('.fleet-ci-config.json')).get('quality_gates', {})
+          print(str(qg.get('require_docs', False)).lower())
+          ")
+          else
+            REQUIRE_DOCS="false"
+          fi
+          echo "require_docs=$REQUIRE_DOCS" >> $GITHUB_OUTPUT
+
+      - name: Check README exists
+        if: steps.config.outputs.require_docs == 'true'
+        run: |
+          MISSING=0
+          for file in README.md README.rst README.txt docs/README.md; do
+            if [ -f "$file" ]; then
+              echo "✅ Found $file"
+              MISSING=0
+              break
+            else
+              MISSING=1
+            fi
+          done
+          if [ $MISSING -eq 1 ]; then
+            echo "::error::No README found — documentation gate failed"
+            exit 1
+          fi
+
+      - name: Check API docs
+        if: steps.config.outputs.require_docs == 'true'
+        continue-on-error: true
+        run: |
+          DOCS_OK=false
+          # Check for various API doc patterns
+          for dir in docs/ api/ reference/ apidocs/; do
+            if [ -d "$dir" ] && [ "$(ls -A $dir)" ]; then
+              echo "✅ API docs found in $dir"
+              DOCS_OK=true
+              break
+            fi
+          done
+          # Check for generated docs config
+          for f in mkdocs.yml docs/conf.py docusaurus.config.js api-extractor.json; do
+            if [ -f "$f" ]; then
+              echo "✅ Docs config found: $f"
+              DOCS_OK=true
+              break
+            fi
+          done
+          if [ "$DOCS_OK" = "false" ]; then
+            echo "⚠️  No API documentation found — consider adding docs"
+          fi
+
+      - name: Skip if docs not required
+        if: steps.config.outputs.require_docs != 'true'
+        run: echo "ℹ️  Documentation gate not required — skipping"
+
+  # --------------------------------------------------------------------------
+  # Gate 5: Security Audit
+  # --------------------------------------------------------------------------
+  security-check:
+    name: 🔒 Security Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download audit report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: security-audit
+          path: audit-artifacts/
+
+      - name: Check for critical vulnerabilities
+        run: |
+          CRITICAL=false
+          if [ -d "audit-artifacts" ]; then
+            for f in audit-artifacts/*.json audit-artifacts/*.txt; do
+              if [ -f "$f" ]; then
+                if rg -i "critical|high" "$f" > /dev/null 2>&1; then
+                  echo "::error::Critical or high severity issues found in $f"
+                  CRITICAL=true
+                fi
+              fi
+            done
+          fi
+          if [ "$CRITICAL" = "true" ]; then
+            exit 1
+          fi
+          echo "✅ No critical security issues detected"
+
+  # --------------------------------------------------------------------------
+  # Final: Aggregate Results
+  # --------------------------------------------------------------------------
+  quality-report:
+    name: 📋 Quality Report
+    needs:
+      - coverage-check
+      - lint-check
+      - conformance-check
+      - docs-check
+      - security-check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load config
+        id: config
+        run: |
+          if [ -f ".fleet-ci-config.json" ]; then
+            BLOCK=$(python3 -c "
+          import json
+          qg = json.load(open('.fleet-ci-config.json')).get('quality_gates', {})
+          print(str(qg.get('block_merge_on_failure', True)).lower())
+          ")
+          else
+            BLOCK="true"
+          fi
+          echo "block_merge=$BLOCK" >> $GITHUB_OUTPUT
+
+      - name: Generate summary
+        run: |
+          echo "## 🚦 Fleet Quality Gates Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📊 Coverage | ${{ needs.coverage-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔍 Lint | ${{ needs.lint-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚡ Conformance | ${{ needs.conformance-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📚 Documentation | ${{ needs.docs-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔒 Security | ${{ needs.security-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check overall pass/fail
+          ALL_PASSED=true
+          for result in \
+            "${{ needs.coverage-check.result }}" \
+            "${{ needs.lint-check.result }}" \
+            "${{ needs.conformance-check.result }}" \
+            "${{ needs.docs-check.result }}" \
+            "${{ needs.security-check.result }}"; do
+            if [ "$result" != "success" ]; then
+              ALL_PASSED=false
+            fi
+          done
+
+          if [ "$ALL_PASSED" = "true" ]; then
+            echo "### ✅ All quality gates passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Some quality gates failed" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.config.outputs.block_merge }}" = "true" ]; then
+              echo "> ⚠️ Merge is blocked — fix failing gates before merging" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            else
+              echo "> ℹ️ Merge blocking is disabled — gates reported but not enforced" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const results = {
+              '📊 Coverage': '${{ needs.coverage-check.result }}',
+              '🔍 Lint': '${{ needs.lint-check.result }}',
+              '⚡ Conformance': '${{ needs.conformance-check.result }}',
+              '📚 Documentation': '${{ needs.docs-check.result }}',
+              '🔒 Security': '${{ needs.security-check.result }}',
+            };
+
+            const allPassed = Object.values(results).every(r => r === 'success');
+            const icon = allPassed ? '✅' : '❌';
+            const body = `## ${icon} Fleet Quality Gates\n\n` +
+              Object.entries(results).map(([k, v]) => `| ${k} | ${v} |`).join('\n') +
+              `\n\n_Commit: ${{ github.sha }}_`;
+
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

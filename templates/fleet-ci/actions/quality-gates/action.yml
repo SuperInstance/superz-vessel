@@ -1,0 +1,114 @@
+name: "Quality Gates"
+description: "Evaluate quality gate conditions and block merge if configured"
+
+inputs:
+  block_merge:
+    description: "Block merge on failure"
+    required: false
+    default: "true"
+  require_tests:
+    description: "Tests are required"
+    required: false
+    default: "true"
+  require_docs:
+    description: "Documentation is required"
+    required: false
+    default: "false"
+  coverage_threshold:
+    description: "Minimum coverage percentage"
+    required: false
+    default: "80"
+  lint_result:
+    description: "Result of lint job"
+    required: false
+    default: "success"
+  test_result:
+    description: "Result of test job"
+    required: false
+    default: "success"
+  conformance_result:
+    description: "Result of conformance job"
+    required: false
+    default: "skipped"
+  audit_result:
+    description: "Result of audit job"
+    required: false
+    default: "success"
+  fleet_check_result:
+    description: "Result of fleet check job"
+    required: false
+    default: "success"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Evaluate gates
+      shell: bash
+      run: |
+        echo "🚦 Evaluating quality gates..."
+        echo ""
+
+        FAILURES=0
+
+        # Gate: Lint
+        if [ "${{ inputs.lint_result }}" != "success" ]; then
+          echo "❌ LINT GATE FAILED (${{ inputs.lint_result }})"
+          FAILURES=$((FAILURES + 1))
+        else
+          echo "✅ LINT GATE PASSED"
+        fi
+
+        # Gate: Tests
+        if [ "${{ inputs.require_tests }}" = "true" ]; then
+          if [ "${{ inputs.test_result }}" != "success" ]; then
+            echo "❌ TEST GATE FAILED (${{ inputs.test_result }})"
+            FAILURES=$((FAILURES + 1))
+          else
+            echo "✅ TEST GATE PASSED"
+          fi
+        else
+          echo "ℹ️  TEST GATE SKIPPED (not required)"
+        fi
+
+        # Gate: Conformance
+        if [ "${{ inputs.conformance_result }}" != "skipped" ]; then
+          if [ "${{ inputs.conformance_result }}" != "success" ]; then
+            echo "❌ CONFORMANCE GATE FAILED (${{ inputs.conformance_result }})"
+            FAILURES=$((FAILURES + 1))
+          else
+            echo "✅ CONFORMANCE GATE PASSED"
+          fi
+        else
+          echo "ℹ️  CONFORMANCE GATE SKIPPED (not configured)"
+        fi
+
+        # Gate: Audit
+        if [ "${{ inputs.audit_result }}" != "success" ]; then
+          echo "❌ AUDIT GATE FAILED (${{ inputs.audit_result }})"
+          FAILURES=$((FAILURES + 1))
+        else
+          echo "✅ AUDIT GATE PASSED"
+        fi
+
+        # Gate: Fleet Check
+        if [ "${{ inputs.fleet_check_result }}" != "success" ]; then
+          echo "❌ FLEET CHECK GATE FAILED (${{ inputs.fleet_check_result }})"
+          FAILURES=$((FAILURES + 1))
+        else
+          echo "✅ FLEET CHECK GATE PASSED"
+        fi
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+        if [ $FAILURES -gt 0 ]; then
+          echo "❌ ${FAILURES} quality gate(s) FAILED"
+          if [ "${{ inputs.block_merge }}" = "true" ]; then
+            echo "🚫 MERGE IS BLOCKED — fix failing gates before merging"
+          else
+            echo "ℹ️  Merge blocking is disabled — gates reported but not enforced"
+          fi
+          exit 1
+        else
+          echo "✅ ALL QUALITY GATES PASSED — safe to merge"
+        fi

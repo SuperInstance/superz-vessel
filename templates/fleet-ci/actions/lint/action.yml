@@ -1,0 +1,45 @@
+name: "Lint"
+description: "Run language-appropriate linter based on config"
+
+inputs:
+  language:
+    description: "Project language (python, rust, typescript)"
+    required: true
+  lint_command:
+    description: "Custom lint command override"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run custom lint command
+      if: inputs.lint_command != ''
+      shell: bash
+      run: ${{ inputs.lint_command }}
+
+    - name: Lint — Python (ruff)
+      if: inputs.language == 'python' && inputs.lint_command == ''
+      shell: bash
+      run: |
+        pip install ruff
+        ruff check . --output-format=github
+        ruff format . --check
+
+    - name: Lint — Rust (cargo fmt + clippy)
+      if: inputs.language == 'rust' && inputs.lint_command == ''
+      shell: bash
+      run: |
+        rustup component add rustfmt clippy
+        cargo fmt --all -- --check
+        cargo clippy --all-targets -- -D warnings
+
+    - name: Lint — TypeScript (eslint)
+      if: inputs.language == 'typescript' && inputs.lint_command == ''
+      shell: bash
+      run: |
+        if [ -f "eslint.config.js" ] || [ -f ".eslintrc.json" ]; then
+          npx eslint . --max-warnings=0 --format github
+        else
+          echo "⚠️  No ESLint config found — skipping"
+        fi
