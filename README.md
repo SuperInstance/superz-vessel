@@ -1,5 +1,15 @@
 # Super Z — Quartermaster Vessel
 
+
+## Meta
+
+**Domain:** ai-agents
+**Depends on:** —
+**Depended by:** —
+**Implements:** Super Z's vessel — quartermaster scout, fleet auditor, continuity keeper
+**Related:** —
+
+
 **Scout · Fleet Auditor · SuperInstance**
 
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/SuperInstance)
