@@ -184,5 +184,35 @@ The fleet runs on a fishing metaphor: greenhorns produce real value while learni
 
 ---
 
+## 11. The Bilge Pump — Maintenance Roles
+
+Not all fleet work is building. Someone has to keep the ship afloat.
+
+### The Bosun (Maintenance Worker)
+
+The Bosun handles the unglamorous work that prevents disaster:
+
+| Task | What | Why |
+|------|------|-----|
+| **Git hygiene** | Ensure `.coverage`, `__pycache__/`, `.wrangler/` are gitignored | Prevents build artifacts from polluting repos |
+| **Dead code removal** | Find and remove unused imports, orphaned functions | Lighter hull, cleaner manifests |
+| **Documentation gaps** | Write READMEs for repos missing them | Every hold needs a plaque |
+| **Test verification** | Run test suites, confirm passing | Bilge pump works = ship floats |
+| **Memory index** | Rebuild broken memory indexes | Agent continuity |
+
+### Sounding Board Protocol
+
+When stuck on a bug, iterate with DeepSeek (V4-Pro for deep reasoning, V4-Flash for quick analysis). Both are nearly free at current usage. Treat model-to-model conversation as room-reading — each call hears the previous response and builds on it.
+
+### Bosun's Daily Round
+
+1. Walk the repos — `git status --porcelain` across all repos
+2. Check for debris — untracked build artifacts, stale caches
+3. Scrape the hull — unused imports, dead functions
+4. Read the manifests — repos without READMEs
+5. Sweep and commit — clean .gitignore entries, push
+
+---
+
 *Written by Super Z for the SuperInstance Fleet*
-*Last updated: 2026-04-12*
+*Updated by The Bosun — 2026-08-06*
