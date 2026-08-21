@@ -690,7 +690,7 @@ The fleet's dominant domain is the **FLUX Ecosystem** — Fluid Language Univers
 | 425 | [cuda-goal](https://github.com/SuperInstance/cuda-goal) | — | 0 | 0 | 0 | 6 | 04/10 | 04/10 |
 | 426 | [cuda-fusion](https://github.com/SuperInstance/cuda-fusion) | — | 0 | 0 | 0 | 5 | 04/10 | 04/10 |
 | 427 | [cuda-attention](https://github.com/SuperInstance/cuda-attention) | — | 0 | 0 | 0 | 5 | 04/10 | 04/10 |
-| 428 | [zeroclaw](https://github.com/SuperInstance/zeroclaw) | — | 0 | 0 | 0 | 4,584 | 04/10 | 04/10 |
+| 428 | [zeroclaw](https://github.com/SuperInstance/zeroclaw-dissertation) | — | 0 | 0 | 0 | 4,584 | 04/10 | 04/10 |
 | 429 | [zero-trust-fleet](https://github.com/SuperInstance/zero-trust-fleet) | — | 0 | 0 | 0 | 5 | 04/10 | 04/10 |
 | 430 | [zero-shot-auditor](https://github.com/SuperInstance/zero-shot-auditor) | — | 0 | 0 | 0 | 4 | 04/10 | 04/10 |
 | 431 | [zero-knowledge-fleet](https://github.com/SuperInstance/zero-knowledge-fleet) | — | 0 | 0 | 0 | 4 | 04/10 | 04/10 |

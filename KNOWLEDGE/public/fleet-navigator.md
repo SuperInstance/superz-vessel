@@ -803,7 +803,7 @@ These are the most important repos to understand first when onboarding to the fl
 | [zero-knowledge-fleet](https://github.com/SuperInstance/zero-knowledge-fleet) | — | 4 KB | 2026-04-10 | 0 | Privacy-preserving fleet operations with ZK proofs |
 | [zero-shot-auditor](https://github.com/SuperInstance/zero-shot-auditor) | — | 4 KB | 2026-04-10 | 0 | Auto-generate audit compliance evidence for every vessel mutation |
 | [zero-trust-fleet](https://github.com/SuperInstance/zero-trust-fleet) | — | 5 KB | 2026-04-10 | 0 | Zero-trust architecture for all fleet communications |
-| [zeroclaw](https://github.com/SuperInstance/zeroclaw) | — | 4.5 MB | 2026-04-10 | 0 | I Know Kung Fu. Now Guns Lots of Guns. The minimum repo-native agent framework. |
+| [zeroclaw](https://github.com/SuperInstance/zeroclaw-dissertation) | — | 4.5 MB | 2026-04-10 | 0 | I Know Kung Fu. Now Guns Lots of Guns. The minimum repo-native agent framework. |
 
 ## Recently Active (Top 20)
 
